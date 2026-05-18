@@ -197,16 +197,3 @@ python data/ci_download_toolkit/download_electricitymaps_10y_hourly.py ^
 cd data/epw_download_toolkit
 python download_epw_from_manifest.py --save-epw-dir --save-validated-manifest
 ```
-
-## 注意事项
-
-- 仓库包含较大的 CSV 和 EPW 数据文件，公开发布前应确认数据授权、引用方式和文件体积是否符合需求。
-- `utils/dc_config.py` 已标注为旧式配置文件；实际默认配置来自 `utils/dc_config.json`。
-- `figures/` 和 `results/` 当前可作为运行输出目录，不应手动依赖其中的临时文件。
-- 年度绿电覆盖不等同于小时级 24/7 零碳；小时级匹配、储能、蓄冷和负荷调度需要在后续供给侧模型中进一步扩展。
-
-## 研究背景
-
-本项目支撑的研究问题是：在全球数据中心持续增长的背景下，如果部分新增算力容量布局在沿海城市，并使用海水冷却降低冷却能耗、通过海上风电或其他零碳电力降低运行排放，该路径能否支撑年度绿电平衡甚至小时级零碳运行。
-
-研究框架详见 `coastal_data_center_outline_v2.md`。
