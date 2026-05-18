@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="figures/logo.png" alt="Logo" width="200"/>
+</p>
+
 # Coastal Zero-Carbon Datacenter
 
 沿海数据中心零碳潜力评估工具包，用于比较常规空气源冷却与海水源冷却在不同城市中的能耗、PUE 和碳排放表现，并为“沿海数据中心 + 海水冷却 + 海上风电/绿电”研究框架提供可复现的数据与模型基础。

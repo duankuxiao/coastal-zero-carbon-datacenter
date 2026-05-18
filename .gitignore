@@ -31,7 +31,5 @@ data/ci_download_toolkit/api_cache_json/
 data/ci_download_toolkit/target_long_csv/
 
 # Local outputs; keep directories tracked only if placeholder files are added later
-figures/*
 results/*
-!figures/.gitkeep
 !results/.gitkeep
