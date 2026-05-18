@@ -51,6 +51,13 @@ class DataCenterEnergyResult:
     city: str
     cooling_type: str
     hours: int
+    simulation_start_time: str | None
+    simulation_end_time: str | None
+    time_alignment: str
+    carbon_intensity_start_time: str | None
+    carbon_intensity_end_time: str | None
+    sst_start_time: str | None
+    sst_end_time: str | None
     rated_it_power_kw: float
     idle_power_fraction: float
     it_energy_kwh: float
@@ -121,6 +128,9 @@ def calculate_data_center_energy(
     p_infer: float = 0.7,
     max_power_fraction: float = 0.88,
     hours: int | None = None,
+    start_time: str | None = None,
+    time_alignment: Literal["sst", "latest", "start_time"] | None = None,
+    max_carbon_gap_hours: int = 6,
     progress: bool = True,
 ) -> DataCenterEnergyResult:
     """Calculate annual or partial-period data-center energy and emissions.
@@ -141,8 +151,14 @@ def calculate_data_center_energy(
         seawater_min_cop: Deprecated; retained for API compatibility.
         seawater_max_cop: Deprecated; retained for API compatibility.
         seawater_aux_power_fraction: Deprecated; retained for API compatibility.
-        hours: Optional number of leading hours to evaluate. Defaults to the
-            shortest available length across required hourly series.
+        hours: Optional number of hours to evaluate. Defaults to the shortest
+            compatible length across required hourly series.
+        start_time: Optional simulation start timestamp. When supplied, input
+            time series are aligned from this timestamp.
+        time_alignment: Optional alignment mode. Defaults to "sst" for
+            seawater cooling and "latest" for air-source cooling.
+        max_carbon_gap_hours: Maximum consecutive missing carbon-intensity
+            hours that may be filled by time interpolation after alignment.
         progress: Print stage progress to stderr. JSON output remains on stdout.
 
     Returns:
@@ -153,26 +169,23 @@ def calculate_data_center_energy(
     city = _validate_city(city)
     cooling_type = _normalize_cooling_type(cooling_type)
 
-    _print_progress("Reading workload data.", enabled=progress)
-    workload = _read_workload(workload_file)
-    _print_progress("Reading carbon-intensity data.", enabled=progress)
-    carbon_intensity = _read_city_column(CARBON_INTENSITY_FILE, city, "carbon intensity")
-    _print_progress("Reading EPW dry-bulb temperature data.", enabled=progress)
-    ambient_temperature = _read_epw_dry_bulb_temperature(city)
-
-    if cooling_type == "air_source":
-        _print_progress("Using EPW dry-bulb temperature as cooling source temperature.", enabled=progress)
-        source_temperature = ambient_temperature
-    else:
-        _print_progress("Reading sea-surface temperature data.", enabled=progress)
-        source_temperature = _read_city_column(SST_FILE, city, "sea surface temperature")
-
     _print_progress("Aligning hourly input series.", enabled=progress)
-    n_hours = _resolve_hours(hours, workload, carbon_intensity, ambient_temperature, source_temperature)
-    workload = workload[:n_hours]
-    carbon_intensity = carbon_intensity[:n_hours]
-    ambient_temperature = ambient_temperature[:n_hours]
-    source_temperature = source_temperature[:n_hours]
+    aligned_inputs = _resolve_aligned_inputs(
+        city=city,
+        cooling_type=cooling_type,
+        workload_file=workload_file,
+        hours=hours,
+        start_time=start_time,
+        time_alignment=time_alignment,
+        max_carbon_gap_hours=max_carbon_gap_hours,
+        progress=progress,
+    )
+    workload = aligned_inputs["workload"]
+    carbon_intensity = aligned_inputs["carbon_intensity"]
+    ambient_temperature = aligned_inputs["ambient_temperature"]
+    source_temperature = aligned_inputs["source_temperature"]
+    metadata = aligned_inputs["metadata"]
+    n_hours = len(workload)
     utilization_level = p_infer * u_infer * r_infer + (1-p_infer) * u_train * r_train  # 0.579
 
     # it_power_kw = rated_it_power_kw * (
@@ -204,6 +217,13 @@ def calculate_data_center_energy(
         city=city,
         cooling_type=cooling_type,
         hours=n_hours,
+        simulation_start_time=metadata["simulation_start_time"],
+        simulation_end_time=metadata["simulation_end_time"],
+        time_alignment=metadata["time_alignment"],
+        carbon_intensity_start_time=metadata["carbon_intensity_start_time"],
+        carbon_intensity_end_time=metadata["carbon_intensity_end_time"],
+        sst_start_time=metadata["sst_start_time"],
+        sst_end_time=metadata["sst_end_time"],
         rated_it_power_kw=float(rated_it_power_kw),
         idle_power_fraction=float(idle_power_fraction),
         it_energy_kwh=it_energy_kwh,
@@ -290,6 +310,45 @@ def _read_city_column(filename: Path, city: str, data_name: str) -> np.ndarray:
     return _fill_missing(values, f"{data_name} for {city}")
 
 
+def _read_city_timeseries(filename: Path, city: str, data_name: str) -> pd.Series:
+    """Read a city column as an hourly timestamp-indexed series.
+
+    Timestamps are normalized to timezone-naive UTC. Duplicate timestamps keep
+    the last non-empty city value so regenerated CSV fragments can be appended
+    safely before this reader is called.
+    """
+    data = pd.read_csv(filename)
+    if "timestamp" not in data.columns:
+        raise ValueError(f"{data_name} file {filename} must contain a 'timestamp' column.")
+    if city not in data.columns:
+        raise ValueError(
+            f"{data_name} file {filename} does not contain a column for {city!r}."
+        )
+
+    timestamps = _parse_timestamp_series(data["timestamp"], filename, data_name)
+    values = pd.to_numeric(data[city], errors="coerce")
+    series_frame = pd.DataFrame(
+        {
+            "timestamp": timestamps,
+            "value": values.astype("float64"),
+            "_row_order": np.arange(len(data)),
+        }
+    )
+    series_frame = series_frame.dropna(subset=["timestamp"])
+    if series_frame.empty:
+        raise ValueError(f"{data_name} file {filename} contains no parseable timestamps.")
+
+    series_frame = series_frame.sort_values(["timestamp", "_row_order"])
+
+    def last_non_empty(group: pd.Series) -> float:
+        non_empty = group.dropna()
+        return float(non_empty.iloc[-1]) if not non_empty.empty else math.nan
+
+    result = series_frame.groupby("timestamp", sort=True)["value"].agg(last_non_empty)
+    result.index = pd.DatetimeIndex(result.index, name="timestamp")
+    return result.sort_index()
+
+
 def _read_epw_dry_bulb_temperature(city: str) -> np.ndarray:
     epw_file = _find_epw_file(city)
     rows = pd.read_csv(epw_file, skiprows=8, header=None)
@@ -297,6 +356,369 @@ def _read_epw_dry_bulb_temperature(city: str) -> np.ndarray:
         raise ValueError(f"EPW file {epw_file} does not contain dry-bulb temperature data.")
     dry_bulb = pd.to_numeric(rows.iloc[:, 6], errors="coerce").to_numpy(dtype=float)
     return _fill_missing(dry_bulb, f"EPW dry-bulb temperature for {city}")
+
+
+def _resolve_aligned_inputs(
+    city: str,
+    cooling_type: CoolingType,
+    workload_file: str | Path,
+    hours: int | None,
+    start_time: str | None,
+    time_alignment: Literal["sst", "latest", "start_time"] | None,
+    max_carbon_gap_hours: int,
+    carbon_intensity_file: str | Path = CARBON_INTENSITY_FILE,
+    sst_file: str | Path = SST_FILE,
+    progress: bool = True,
+) -> dict[str, object]:
+    """Return workload, weather, SST, and carbon data on one timestamp axis."""
+    if max_carbon_gap_hours < 0:
+        raise ValueError("max_carbon_gap_hours must be non-negative.")
+
+    _print_progress("Reading workload data.", enabled=progress)
+    workload = _read_workload(workload_file)
+    _print_progress("Reading carbon-intensity data.", enabled=progress)
+    carbon_path = Path(carbon_intensity_file)
+    carbon_series = _read_city_timeseries(carbon_path, city, "carbon intensity")
+    _print_progress("Reading EPW dry-bulb temperature data.", enabled=progress)
+    ambient_epw = _read_epw_dry_bulb_temperature(city)
+
+    alignment = _resolve_time_alignment(cooling_type, time_alignment, start_time)
+    sst_series: pd.Series | None = None
+    sst_path = Path(sst_file)
+    if cooling_type == "seawater":
+        _print_progress("Reading sea-surface temperature data.", enabled=progress)
+        sst_series = _read_city_timeseries(sst_path, city, "sea surface temperature")
+
+    timestamps = _select_simulation_timestamps(
+        city=city,
+        cooling_type=cooling_type,
+        alignment=alignment,
+        hours=hours,
+        start_time=start_time,
+        workload_length=len(workload),
+        carbon_series=carbon_series,
+        sst_series=sst_series,
+    )
+
+    workload = workload[: len(timestamps)]
+    carbon_aligned = _align_carbon_intensity(
+        carbon_series=carbon_series,
+        timestamps=timestamps,
+        city=city,
+        filename=carbon_path,
+        max_gap_hours=max_carbon_gap_hours,
+    )
+    ambient_temperature = _map_epw_to_timestamps(ambient_epw, timestamps, city)
+
+    if cooling_type == "seawater":
+        if sst_series is None:
+            raise ValueError("Seawater cooling requires sea-surface temperature data.")
+        source_series = _align_value_series(
+            sst_series,
+            timestamps,
+            city=city,
+            filename=sst_path,
+            data_name="sea surface temperature",
+        )
+        source_temperature = source_series.to_numpy(dtype=float)
+        sst_start_time = _format_timestamp(source_series.index[0])
+        sst_end_time = _format_timestamp(source_series.index[-1])
+    else:
+        _print_progress("Using EPW dry-bulb temperature as cooling source temperature.", enabled=progress)
+        source_temperature = ambient_temperature
+        sst_start_time = None
+        sst_end_time = None
+
+    metadata = {
+        "simulation_start_time": _format_timestamp(timestamps[0]),
+        "simulation_end_time": _format_timestamp(timestamps[-1]),
+        "time_alignment": alignment,
+        "carbon_intensity_start_time": _format_timestamp(carbon_aligned.index[0]),
+        "carbon_intensity_end_time": _format_timestamp(carbon_aligned.index[-1]),
+        "sst_start_time": sst_start_time,
+        "sst_end_time": sst_end_time,
+    }
+
+    return {
+        "timestamps": timestamps,
+        "workload": workload,
+        "carbon_intensity": carbon_aligned.to_numpy(dtype=float),
+        "ambient_temperature": ambient_temperature,
+        "source_temperature": source_temperature,
+        "metadata": metadata,
+    }
+
+
+def _resolve_time_alignment(
+    cooling_type: CoolingType,
+    time_alignment: Literal["sst", "latest", "start_time"] | None,
+    start_time: str | None,
+) -> Literal["sst", "latest", "start_time"]:
+    if start_time is not None:
+        return "start_time"
+    if time_alignment is None:
+        return "sst" if cooling_type == "seawater" else "latest"
+    if time_alignment not in {"sst", "latest", "start_time"}:
+        raise ValueError("time_alignment must be one of: sst, latest, start_time.")
+    if time_alignment == "sst" and cooling_type != "seawater":
+        raise ValueError("time_alignment='sst' is only valid for seawater cooling.")
+    return time_alignment
+
+
+def _select_simulation_timestamps(
+    city: str,
+    cooling_type: CoolingType,
+    alignment: Literal["sst", "latest", "start_time"],
+    hours: int | None,
+    start_time: str | None,
+    workload_length: int,
+    carbon_series: pd.Series,
+    sst_series: pd.Series | None,
+) -> pd.DatetimeIndex:
+    if alignment == "sst":
+        if cooling_type != "seawater" or sst_series is None:
+            raise ValueError("SST alignment requires seawater cooling and SST data.")
+        n_hours = _resolve_requested_hours(hours, workload_length, len(sst_series))
+        return pd.DatetimeIndex(sst_series.index[:n_hours])
+
+    if alignment == "latest":
+        if cooling_type == "seawater":
+            if sst_series is None:
+                raise ValueError("Seawater cooling requires SST data for latest alignment.")
+            start_bound = max(carbon_series.index.min(), sst_series.index.min())
+            end_bound = min(carbon_series.index.max(), sst_series.index.max())
+            label = "common carbon/SST"
+        else:
+            start_bound = carbon_series.index.min()
+            end_bound = carbon_series.index.max()
+            label = "carbon intensity"
+        available_hours = _inclusive_hour_count(start_bound, end_bound)
+        n_hours = _resolve_requested_hours(hours, workload_length, available_hours)
+        return pd.DatetimeIndex(pd.date_range(end=end_bound, periods=n_hours, freq="h"))
+
+    if alignment == "start_time":
+        if not start_time:
+            raise ValueError("time_alignment='start_time' requires --start-time.")
+        start_timestamp = _parse_timestamp_argument(start_time, "--start-time")
+        if cooling_type == "seawater":
+            if sst_series is None:
+                raise ValueError("Seawater cooling requires SST data for start-time alignment.")
+            end_bound = min(carbon_series.index.max(), sst_series.index.max())
+            label = "common carbon/SST"
+        else:
+            end_bound = carbon_series.index.max()
+            label = "carbon intensity"
+        available_hours = _inclusive_hour_count(start_timestamp, end_bound)
+        n_hours = _resolve_requested_hours(hours, workload_length, available_hours)
+        end_timestamp = start_timestamp + pd.Timedelta(hours=n_hours - 1)
+        if end_timestamp > end_bound:
+            raise ValueError(
+                f"Requested {n_hours} hour(s) for {city}, but the {label} data only "
+                f"extends through {_format_timestamp(end_bound)}."
+            )
+        return pd.DatetimeIndex(pd.date_range(start=start_timestamp, periods=n_hours, freq="h"))
+
+    raise ValueError(f"Unsupported time alignment mode: {alignment!r}")
+
+
+def _resolve_requested_hours(
+    requested_hours: int | None,
+    workload_length: int,
+    available_hours: int,
+) -> int:
+    if requested_hours is not None and requested_hours <= 0:
+        raise ValueError("hours must be positive.")
+    max_available = min(int(workload_length), int(available_hours))
+    if max_available <= 0:
+        raise ValueError("No aligned hourly input data are available.")
+    if requested_hours is None:
+        return max_available
+    if requested_hours > max_available:
+        raise ValueError(
+            f"Requested {requested_hours} hours, but only {max_available} aligned hours are available."
+        )
+    return int(requested_hours)
+
+
+def _inclusive_hour_count(start: pd.Timestamp, end: pd.Timestamp) -> int:
+    start = pd.Timestamp(start)
+    end = pd.Timestamp(end)
+    if pd.isna(start) or pd.isna(end) or end < start:
+        return 0
+    return int((end - start) / pd.Timedelta(hours=1)) + 1
+
+
+def _align_carbon_intensity(
+    carbon_series: pd.Series,
+    timestamps: pd.DatetimeIndex,
+    city: str,
+    filename: Path,
+    max_gap_hours: int,
+) -> pd.Series:
+    aligned = carbon_series.reindex(timestamps)
+    if aligned.notna().sum() == 0:
+        raise ValueError(
+            f"Carbon intensity for {city!r} in {filename} has no overlap with "
+            f"the requested simulation window {_format_time_range(timestamps)}. "
+            f"Carbon data range: {_format_time_range(carbon_series.index)}."
+        )
+
+    missing_ranges = _missing_ranges(aligned)
+    invalid_ranges = [
+        item
+        for item in missing_ranges
+        if item["hours"] > max_gap_hours or item["at_edge"]
+    ]
+    if invalid_ranges:
+        raise ValueError(
+            f"Carbon intensity for {city!r} in {filename} is missing aligned "
+            f"hour(s) beyond the allowed {max_gap_hours}-hour gap. "
+            f"Missing ranges: {_format_missing_ranges(invalid_ranges)}. "
+            "Regenerate the carbon-intensity file for the simulation window or "
+            "choose a different --start-time/--time-alignment."
+        )
+
+    if missing_ranges:
+        aligned = aligned.interpolate(
+            method="time",
+            limit=max_gap_hours,
+            limit_area="inside",
+        )
+    if aligned.isna().any():
+        remaining = _missing_ranges(aligned)
+        raise ValueError(
+            f"Carbon intensity for {city!r} in {filename} still contains missing "
+            f"values after interpolation. Missing ranges: {_format_missing_ranges(remaining)}."
+        )
+    return aligned.astype(float)
+
+
+def _align_value_series(
+    series: pd.Series,
+    timestamps: pd.DatetimeIndex,
+    city: str,
+    filename: Path,
+    data_name: str,
+) -> pd.Series:
+    aligned = series.reindex(timestamps)
+    if aligned.notna().sum() == 0:
+        raise ValueError(
+            f"{data_name} for {city!r} in {filename} has no overlap with "
+            f"the requested simulation window {_format_time_range(timestamps)}. "
+            f"Data range: {_format_time_range(series.index)}."
+        )
+    if aligned.isna().any():
+        aligned = aligned.interpolate(method="time", limit_direction="both")
+    if aligned.isna().any():
+        missing = _missing_ranges(aligned)
+        raise ValueError(
+            f"{data_name} for {city!r} in {filename} contains missing values "
+            f"after alignment. Missing ranges: {_format_missing_ranges(missing)}."
+        )
+    return aligned.astype(float)
+
+
+def _map_epw_to_timestamps(
+    dry_bulb_temperature: np.ndarray,
+    timestamps: pd.DatetimeIndex,
+    city: str,
+) -> np.ndarray:
+    dry_bulb = np.asarray(dry_bulb_temperature, dtype=float)
+    if len(dry_bulb) < 8760:
+        raise ValueError(f"EPW dry-bulb temperature for {city!r} has fewer than 8760 hours.")
+
+    feb_29 = (timestamps.month == 2) & (timestamps.day == 29)
+    if bool(feb_29.any()):
+        first_bad = timestamps[feb_29][0]
+        raise ValueError(
+            f"EPW dry-bulb mapping for {city!r} received leap-day timestamp "
+            f"{_format_timestamp(first_bad)}. This project assumes non-leap 8760-hour years."
+        )
+
+    epw_index = (timestamps.dayofyear.to_numpy(dtype=int) - 1) * 24 + timestamps.hour.to_numpy(dtype=int)
+    if np.any(epw_index < 0) or np.any(epw_index >= 8760):
+        raise ValueError(
+            f"EPW dry-bulb mapping for {city!r} produced indices outside a non-leap 8760-hour year."
+        )
+    return dry_bulb[epw_index]
+
+
+def _parse_timestamp_series(values: pd.Series, filename: Path, data_name: str) -> pd.Series:
+    parsed = _parse_datetime_utc(values)
+    if parsed.notna().sum() == 0:
+        raise ValueError(f"{data_name} file {filename} contains no parseable timestamps.")
+    return parsed.dt.tz_convert(None)
+
+
+def _parse_timestamp_argument(value: str, label: str) -> pd.Timestamp:
+    parsed = _parse_datetime_utc(pd.Series([value]))
+    if parsed.isna().iloc[0]:
+        raise ValueError(f"{label} must be a parseable timestamp, got {value!r}.")
+    return pd.Timestamp(parsed.dt.tz_convert(None).iloc[0])
+
+
+def _parse_datetime_utc(values: pd.Series) -> pd.Series:
+    try:
+        parsed = pd.to_datetime(values, errors="coerce", utc=True, format="mixed")
+    except (TypeError, ValueError):
+        parsed = pd.to_datetime(values, errors="coerce", utc=True)
+
+    parsed = pd.Series(parsed, index=values.index)
+    if parsed.notna().sum() < values.notna().sum():
+        parsed = values.map(
+            lambda value: pd.to_datetime(value, errors="coerce", utc=True)
+            if pd.notna(value)
+            else pd.NaT
+        )
+        parsed = pd.Series(pd.to_datetime(parsed, errors="coerce", utc=True), index=values.index)
+    return parsed
+
+
+def _missing_ranges(series: pd.Series) -> list[dict[str, object]]:
+    missing = series.isna().to_numpy()
+    ranges: list[dict[str, object]] = []
+    start_index: int | None = None
+    for index, is_missing in enumerate(missing):
+        if is_missing and start_index is None:
+            start_index = index
+        if start_index is not None and (not is_missing or index == len(missing) - 1):
+            end_index = index - 1 if not is_missing else index
+            ranges.append(
+                {
+                    "start": series.index[start_index],
+                    "end": series.index[end_index],
+                    "hours": end_index - start_index + 1,
+                    "at_edge": start_index == 0 or end_index == len(missing) - 1,
+                }
+            )
+            start_index = None
+    return ranges
+
+
+def _format_missing_ranges(ranges: list[dict[str, object]], limit: int = 5) -> str:
+    if not ranges:
+        return "none"
+    formatted = [
+        f"{_format_timestamp(item['start'])} to {_format_timestamp(item['end'])} "
+        f"({item['hours']}h)"
+        for item in ranges[:limit]
+    ]
+    if len(ranges) > limit:
+        formatted.append(f"... and {len(ranges) - limit} more")
+    return "; ".join(formatted)
+
+
+def _format_time_range(index: pd.Index) -> str:
+    if len(index) == 0:
+        return "empty"
+    return f"{_format_timestamp(index[0])} to {_format_timestamp(index[-1])}"
+
+
+def _format_timestamp(value: object) -> str | None:
+    if value is None or pd.isna(value):
+        return None
+    return pd.Timestamp(value).strftime("%Y-%m-%d %H:%M:%S")
+
 
 
 def _find_epw_file(city: str) -> Path:
@@ -598,6 +1020,8 @@ def _format_result(result: DataCenterEnergyResult) -> str:
             f"City: {result.city}",
             f"Cooling type: {result.cooling_type}",
             f"Hours: {result.hours}",
+            f"Time alignment: {result.time_alignment}",
+            f"Simulation window: {result.simulation_start_time} to {result.simulation_end_time}",
             f"IT energy: {result.it_energy_kwh:,.2f} kWh",
             f"Cooling energy: {result.cooling_energy_kwh:,.2f} kWh",
             f"Total energy: {result.total_energy_kwh:,.2f} kWh",
@@ -642,6 +1066,9 @@ def main(args) -> None:
         rated_it_power_kw=args.rated_it_power_kw,
         idle_power_fraction=args.idle_power_fraction,
         hours=args.hours,
+        start_time=args.start_time,
+        time_alignment=args.time_alignment,
+        max_carbon_gap_hours=args.max_carbon_gap_hours,
     )
     csv_path = save_result_csv(result, args.output_dir)
     if args.json:
@@ -672,6 +1099,26 @@ if __name__ == "__main__":
     parser.add_argument("--rated-it-power-kw", type=float, default=20000.0)
     parser.add_argument("--idle-power-fraction", type=float, default=0.35)
     parser.add_argument("--hours", type=int, default=None)
+    parser.add_argument(
+        "--start-time",
+        default=None,
+        help='Optional simulation start timestamp, for example "2025-01-01 00:00".',
+    )
+    parser.add_argument(
+        "--time-alignment",
+        choices=["sst", "latest", "start_time"],
+        default=None,
+        help=(
+            "Input time-axis alignment mode. Defaults to sst for seawater and "
+            "latest for air_source. Supplying --start-time uses start_time mode."
+        ),
+    )
+    parser.add_argument(
+        "--max-carbon-gap-hours",
+        type=int,
+        default=6,
+        help="Maximum consecutive missing carbon-intensity hours to interpolate after alignment.",
+    )
     parser.add_argument(
         "--output-dir",
         default=str(DEFAULT_OUTPUT_DIR),

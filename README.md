@@ -15,7 +15,7 @@
 - 空气源/常规冷却与海水源冷却对比。
 - 基于 EPW 文件读取室外干球温度。
 - 基于 Open-Meteo 海表温度数据驱动海水冷却模型。
-- 基于 Electricity Maps 碳强度数据估算运行排放。
+- 基于 Electricity Maps 碳强度数据估算运行排放，并按 timestamp 与 SST/气象/负载自动对齐。
 - 详细海水源热泵模型，覆盖自然冷却、混合冷却和机械热泵三种运行模式。
 - 输出泵、压缩机、换热器辅助功耗、有效 COP、未满足冷量和约束违规等诊断指标。
 - 提供 EPW、海表温度、碳强度数据下载与校验脚本。
@@ -87,7 +87,8 @@ python -m core.calculate_datacenter_energy ^
   --city "Shanghai" ^
   --cooling air_source ^
   --rated-it-power-kw 20000 ^
-  --hours 8760
+  --hours 8760 ^
+  --time-alignment latest
 ```
 
 计算单个城市的海水源冷却结果：
@@ -98,6 +99,7 @@ python -m core.calculate_datacenter_energy ^
   --cooling seawater ^
   --rated-it-power-kw 20000 ^
   --hours 8760 ^
+  --time-alignment sst ^
   --json
 ```
 
@@ -108,6 +110,7 @@ python run_baseline.py ^
   --rated-it-power-kw 20000 ^
   --idle-power-fraction 0.3 ^
   --hours 8760 ^
+  --max-carbon-gap-hours 6 ^
   --output-dir results
 ```
 
@@ -129,6 +132,7 @@ baseline_strict_coastal_global_savings_<rated_power>_<hours>.csv
 结果字段包括：
 
 - 基础能耗与排放：IT 能耗、冷却能耗、总能耗、碳排放、平均 IT 功率、平均冷却功率、平均 PUE。
+- 时间窗口：仿真起止时间、时间对齐模式、碳强度起止时间、SST 起止时间。
 - 温度统计：室外干球温度、海表温度、源温度均值和极值。
 - 海水冷却运行状态：自然冷却小时数、混合冷却小时数、机械热泵小时数。
 - 海水系统能耗分解：海水取排水泵能耗、冷冻水泵能耗、压缩机能耗、换热器辅助能耗。
@@ -142,6 +146,16 @@ baseline_strict_coastal_global_savings_<rated_power>_<hours>.csv
 2. `core/seawater_heat_pump.py` 建立海水源热泵工程模型，覆盖冷冻水回路、海水取排水回路、板式换热器、热泵机组性能曲线和运行控制。
 3. `core/calculate_datacenter_energy.py` 将城市气象、海表温度、碳强度和工作负载对齐为小时序列，并调用详细模型计算能耗和排放。
 4. `run_baseline.py` 遍历 `target_city_map.csv` 中 `Coastal class == Strict coastal` 的城市，分别计算空气源和海水源冷却结果，再汇总节能减排效果。
+
+### 时间对齐
+
+`--hours` 仍表示模拟小时数，但碳强度不再取 `carbon_intensity_electricitymaps.csv` 的前 `hours` 行：
+
+- `seawater` 默认使用 `--time-alignment sst`，以 SST 文件的 timestamp 作为主时间轴，并把碳强度精确对齐到同一小时。
+- `air_source` 默认使用 `--time-alignment latest`，使用碳强度文件中最新的 `hours` 小时时间窗口。
+- 指定 `--start-time "2025-01-01 00:00"` 时会自动切换为 `start_time` 模式，从该时刻开始截取 `hours` 小时。
+- 碳强度缺少少量小时会在对齐后按时间插值，默认最大连续缺口为 6 小时，可通过 `--max-carbon-gap-hours` 调整；超过阈值会报错。
+- EPW 干球温度仍按 8760 小时典型气象年读取，并根据目标 timestamp 的 day-of-year/hour 映射到仿真时间轴。
 
 ### 海水源热泵模型
 

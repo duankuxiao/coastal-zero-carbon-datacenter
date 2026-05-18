@@ -36,6 +36,9 @@ def run_baseline(
     rated_it_power_kw: float = 20000.0,
     idle_power_fraction: float = 0.3,
     hours: int | None = None,
+    start_time: str | None = None,
+    time_alignment: str | None = None,
+    max_carbon_gap_hours: int = 6,
     output_dir: str | Path = DEFAULT_OUTPUT_DIR,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Run the strict-coastal baseline and save aggregate result tables."""
@@ -68,6 +71,9 @@ def run_baseline(
             continue
 
         try:
+            air_time_alignment = (
+                None if time_alignment == "sst" and start_time is None else time_alignment
+            )
             air_result = calculate_data_center_energy(
                 city=city,
                 cooling_type="air_source",
@@ -75,6 +81,9 @@ def run_baseline(
                 rated_it_power_kw=rated_it_power_kw,
                 idle_power_fraction=idle_power_fraction,
                 hours=hours,
+                start_time=start_time,
+                time_alignment=air_time_alignment,
+                max_carbon_gap_hours=max_carbon_gap_hours,
             )
             seawater_result = calculate_data_center_energy(
                 city=city,
@@ -83,6 +92,9 @@ def run_baseline(
                 rated_it_power_kw=rated_it_power_kw,
                 idle_power_fraction=idle_power_fraction,
                 hours=hours,
+                start_time=start_time,
+                time_alignment=time_alignment,
+                max_carbon_gap_hours=max_carbon_gap_hours,
             )
         except Exception as exc:
             skipped.append((city, str(exc)))
@@ -150,6 +162,7 @@ def _build_global_savings_table(
     cooling_savings = air_cooling - seawater_cooling
     total_savings = air_total - seawater_total
     carbon_savings = air_carbon - seawater_carbon
+    time_metadata = _summary_time_metadata(all_results)
 
     return pd.DataFrame(
         [
@@ -173,9 +186,40 @@ def _build_global_savings_table(
                 "carbon_emissions_savings_pct_vs_air_source": _pct(
                     carbon_savings, air_carbon
                 ),
+                **time_metadata,
             }
         ]
     )
+
+
+def _summary_time_metadata(all_results: pd.DataFrame) -> dict[str, object]:
+    if all_results.empty:
+        return {}
+
+    metadata_columns = [
+        "simulation_start_time",
+        "simulation_end_time",
+        "carbon_intensity_start_time",
+        "carbon_intensity_end_time",
+        "sst_start_time",
+        "sst_end_time",
+    ]
+    summary: dict[str, object] = {}
+    for column in metadata_columns:
+        if column not in all_results.columns:
+            continue
+        values = all_results[column].dropna().astype(str)
+        if values.empty:
+            summary[column] = None
+        elif column.endswith("_start_time"):
+            summary[column] = values.min()
+        else:
+            summary[column] = values.max()
+
+    if "time_alignment" in all_results.columns:
+        modes = sorted(all_results["time_alignment"].dropna().astype(str).unique())
+        summary["time_alignment"] = ",".join(modes)
+    return summary
 
 
 def _float(value: object) -> float:
@@ -221,6 +265,26 @@ def main() -> None:
     parser.add_argument("--idle-power-fraction", type=float, default=0.3)
     parser.add_argument("--hours", type=int, default=8760)
     parser.add_argument(
+        "--start-time",
+        default=None,
+        help='Optional simulation start timestamp, for example "2025-01-01 00:00".',
+    )
+    parser.add_argument(
+        "--time-alignment",
+        choices=["sst", "latest", "start_time"],
+        default=None,
+        help=(
+            "Input time-axis alignment mode. Defaults to sst for seawater and "
+            "latest for air_source. Supplying --start-time uses start_time mode."
+        ),
+    )
+    parser.add_argument(
+        "--max-carbon-gap-hours",
+        type=int,
+        default=6,
+        help="Maximum consecutive missing carbon-intensity hours to interpolate after alignment.",
+    )
+    parser.add_argument(
         "--output-dir",
         default=str(DEFAULT_OUTPUT_DIR),
         help="Directory for aggregate output CSV files. Defaults to results/.",
@@ -232,6 +296,9 @@ def main() -> None:
         rated_it_power_kw=args.rated_it_power_kw,
         idle_power_fraction=args.idle_power_fraction,
         hours=args.hours,
+        start_time=args.start_time,
+        time_alignment=args.time_alignment,
+        max_carbon_gap_hours=args.max_carbon_gap_hours,
         output_dir=args.output_dir,
     )
 
