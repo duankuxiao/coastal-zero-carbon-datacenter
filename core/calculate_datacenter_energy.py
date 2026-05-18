@@ -66,6 +66,17 @@ class DataCenterEnergyResult:
     min_source_temperature_c: float
     mean_source_temperature_c: float
     max_source_temperature_c: float
+    free_cooling_hours: float
+    hybrid_cooling_hours: float
+    mechanical_cooling_hours: float
+    average_effective_cop: float
+    average_compressor_cop: float
+    seawater_pump_energy_kwh: float
+    chilled_water_pump_energy_kwh: float
+    compressor_energy_kwh: float
+    heat_exchanger_aux_energy_kwh: float
+    unmet_cooling_energy_kwh: float
+    constraint_violation_hours: float
 
 
 def list_available_cities(city_map_file: Path = CITY_MAP_FILE) -> list[str]:
@@ -203,11 +214,22 @@ def calculate_data_center_energy(
         average_it_power_kw=float(np.nanmean(it_power_kw)),
         average_cooling_power_kw=float(np.nanmean(cooling_power_kw)),
         average_total_power_kw=float(np.nanmean(total_power_kw)),
-        average_cop=float(np.nanmean(cop[np.isfinite(cop)])),
+        average_cop=float(_finite_mean(cop)),
         average_pue=float(total_energy_kwh / it_energy_kwh) if it_energy_kwh else math.inf,
         min_source_temperature_c=float(np.nanmin(source_temperature)),
         mean_source_temperature_c=float(np.nanmean(source_temperature)),
         max_source_temperature_c=float(np.nanmax(source_temperature)),
+        free_cooling_hours=float(simulation["free_cooling_hours"]),
+        hybrid_cooling_hours=float(simulation["hybrid_cooling_hours"]),
+        mechanical_cooling_hours=float(simulation["mechanical_cooling_hours"]),
+        average_effective_cop=float(_finite_mean(simulation["seawater_effective_cop"])),
+        average_compressor_cop=float(_finite_mean(simulation["seawater_compressor_cop"])),
+        seawater_pump_energy_kwh=float(np.nansum(simulation["seawater_pump_power_w"]) / 1000.0),
+        chilled_water_pump_energy_kwh=float(np.nansum(simulation["chilled_water_pump_power_w"]) / 1000.0),
+        compressor_energy_kwh=float(np.nansum(simulation["compressor_power_w"]) / 1000.0),
+        heat_exchanger_aux_energy_kwh=float(np.nansum(simulation["heat_exchanger_aux_power_w"]) / 1000.0),
+        unmet_cooling_energy_kwh=float(np.nansum(simulation["unmet_cooling_load_w"]) / 1000.0),
+        constraint_violation_hours=float(np.nansum(simulation["constraint_violation"])),
     )
 
 
@@ -338,6 +360,15 @@ def _simulate_datacenter_energy_with_env_model(
     it_power_kw = np.zeros_like(workload, dtype=float)
     cooling_power_kw = np.zeros_like(workload, dtype=float)
     cooling_cop = np.full_like(workload, np.nan, dtype=float)
+    seawater_effective_cop = np.full_like(workload, np.nan, dtype=float)
+    seawater_compressor_cop = np.full_like(workload, np.nan, dtype=float)
+    seawater_pump_power_w = np.zeros_like(workload, dtype=float)
+    chilled_water_pump_power_w = np.zeros_like(workload, dtype=float)
+    compressor_power_w = np.zeros_like(workload, dtype=float)
+    heat_exchanger_aux_power_w = np.zeros_like(workload, dtype=float)
+    unmet_cooling_load_w = np.zeros_like(workload, dtype=float)
+    constraint_violation = np.zeros_like(workload, dtype=float)
+    cooling_modes: list[str] = []
 
     _print_progress(f"Starting hourly simulation for {len(workload)} hour(s).", enabled=progress)
     progress_marks = _progress_mark_indices(len(workload), intervals=10)
@@ -376,6 +407,15 @@ def _simulate_datacenter_energy_with_env_model(
             cooling_cop[hour_index] = (
                 hvac_details["CRAC_cooling_load"] / hvac_details["selected_hvac_power"]
             )
+        cooling_modes.append(str(hvac_details.get("seawater_cooling_mode", "not_used")))
+        seawater_effective_cop[hour_index] = float(hvac_details.get("seawater_effective_cop", math.nan))
+        seawater_compressor_cop[hour_index] = float(hvac_details.get("seawater_compressor_cop", math.nan))
+        seawater_pump_power_w[hour_index] = float(hvac_details.get("seawater_pump_power", 0.0))
+        chilled_water_pump_power_w[hour_index] = float(hvac_details.get("seawater_chilled_water_pump_power_w", 0.0))
+        compressor_power_w[hour_index] = float(hvac_details.get("seawater_compressor_power_w", 0.0))
+        heat_exchanger_aux_power_w[hour_index] = float(hvac_details.get("seawater_heat_exchanger_aux_power_w", 0.0))
+        unmet_cooling_load_w[hour_index] = float(hvac_details.get("seawater_unmet_cooling_load_w", 0.0))
+        constraint_violation[hour_index] = 1.0 if hvac_details.get("seawater_constraint_violation", False) else 0.0
         if hour_index in progress_marks:
             completed = hour_index + 1
             percent = completed / len(workload) * 100.0
@@ -388,6 +428,17 @@ def _simulate_datacenter_energy_with_env_model(
         "it_power_kw": it_power_kw,
         "cooling_power_kw": cooling_power_kw,
         "cooling_cop": cooling_cop,
+        "free_cooling_hours": float(sum(mode == "free_cooling" for mode in cooling_modes)),
+        "hybrid_cooling_hours": float(sum(mode == "hybrid_cooling" for mode in cooling_modes)),
+        "mechanical_cooling_hours": float(sum(mode == "mechanical_heat_pump" for mode in cooling_modes)),
+        "seawater_effective_cop": seawater_effective_cop,
+        "seawater_compressor_cop": seawater_compressor_cop,
+        "seawater_pump_power_w": seawater_pump_power_w,
+        "chilled_water_pump_power_w": chilled_water_pump_power_w,
+        "compressor_power_w": compressor_power_w,
+        "heat_exchanger_aux_power_w": heat_exchanger_aux_power_w,
+        "unmet_cooling_load_w": unmet_cooling_load_w,
+        "constraint_violation": constraint_violation,
     }
 
 
@@ -420,13 +471,17 @@ def _build_scaled_dc_config(
     _calibrate_dc_config_it_capacity(dc_config, rated_it_power_w, crac_setpoint_c)
     max_ambient_temp = float(np.nanmax(ambient_temperature_c))
     _print_progress("Sizing chiller and cooling-tower reference load.", enabled=progress)
-    with contextlib.redirect_stdout(io.StringIO()):
-        ctafr, ct_rated_load = DataCenter.chiller_sizing(
-            dc_config,
-            min_CRAC_setpoint=15.0,
-            max_CRAC_setpoint=21.6,
-            max_ambient_temp=max_ambient_temp,
-        )
+    try:
+        with contextlib.redirect_stdout(io.StringIO()):
+            ctafr, ct_rated_load = DataCenter.chiller_sizing(
+                dc_config,
+                min_CRAC_setpoint=15.0,
+                max_CRAC_setpoint=21.6,
+                max_ambient_temp=max_ambient_temp,
+            )
+    except Exception:
+        ctafr = dc_config.CT_REFRENCE_AIR_FLOW_RATE
+        ct_rated_load = max(dc_config.CT_FAN_REF_P, rated_it_power_w)
     dc_config.CT_REFRENCE_AIR_FLOW_RATE = ctafr
     dc_config.CT_FAN_REF_P = ct_rated_load
     return dc_config
@@ -529,6 +584,12 @@ def _fill_missing(values: np.ndarray, label: str) -> np.ndarray:
     if series.isna().any():
         series = series.interpolate(limit_direction="both")
     return series.to_numpy(dtype=float)
+
+
+def _finite_mean(values: np.ndarray) -> float:
+    finite_values = np.asarray(values, dtype=float)
+    finite_values = finite_values[np.isfinite(finite_values)]
+    return float(np.nanmean(finite_values)) if finite_values.size else math.nan
 
 
 def _format_result(result: DataCenterEnergyResult) -> str:

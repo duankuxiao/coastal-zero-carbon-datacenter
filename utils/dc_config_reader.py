@@ -149,6 +149,9 @@ class DC_Config:
         ##################################################################
 
         seawater_config = json_obj.get('seawater_cooling_configuration', {})
+        def seawater_value(upper_name, lower_name, default):
+            return seawater_config.get(lower_name, seawater_config.get(upper_name, default))
+
         self.COOLING_SYSTEM_MODE = seawater_config.get('COOLING_SYSTEM_MODE', 'conventional')
         self.SEAWATER_DEFAULT_TEMP_C = seawater_config.get('SEAWATER_DEFAULT_TEMP_C', 15.0)
         self.SEAWATER_CHILLED_WATER_SUPPLY_TEMP_C = seawater_config.get('SEAWATER_CHILLED_WATER_SUPPLY_TEMP_C', 12.0)
@@ -165,6 +168,32 @@ class DC_Config:
         self.SEAWATER_CP_J_PER_KG_K = seawater_config.get('SEAWATER_CP_J_PER_KG_K', 3990.0)
         self.SEAWATER_DENSITY_KG_PER_M3 = seawater_config.get('SEAWATER_DENSITY_KG_PER_M3', 1025.0)
         self.SEAWATER_AUX_POWER_RATIO = seawater_config.get('SEAWATER_AUX_POWER_RATIO', 0.01)
+        self.SEAWATER_MAX_TEMPERATURE_C = seawater_value('SEAWATER_MAX_TEMPERATURE_C', 'seawater_max_temperature_c', 35.0)
+        self.SEAWATER_MIN_TEMPERATURE_C = seawater_value('SEAWATER_MIN_TEMPERATURE_C', 'seawater_min_temperature_c', -2.0)
+        self.SEAWATER_MAX_OUTFALL_TEMPERATURE_RISE_C = seawater_value('SEAWATER_MAX_OUTFALL_TEMPERATURE_RISE_C', 'max_outfall_temperature_rise_c', self.SEAWATER_DELTA_T_C)
+        self.SEAWATER_MIN_FLOW_M3_S = seawater_value('SEAWATER_MIN_FLOW_M3_S', 'min_seawater_flow_m3_s', 0.0)
+        self.SEAWATER_MAX_FLOW_M3_S = seawater_value('SEAWATER_MAX_FLOW_M3_S', 'max_seawater_flow_m3_s', 3.0)
+        self.SEAWATER_HEAT_EXCHANGER_UA_W_PER_K = seawater_value('SEAWATER_HEAT_EXCHANGER_UA_W_PER_K', 'heat_exchanger_ua_w_per_k', 0.0)
+        self.SEAWATER_HEAT_EXCHANGER_EFFECTIVENESS = seawater_value('SEAWATER_HEAT_EXCHANGER_EFFECTIVENESS', 'heat_exchanger_effectiveness', 0.75)
+        self.SEAWATER_FOULING_FACTOR_M2K_PER_W = seawater_value('SEAWATER_FOULING_FACTOR_M2K_PER_W', 'fouling_factor_m2k_per_w', 0.0)
+        self.SEAWATER_INTAKE_DEPTH_M = seawater_value('SEAWATER_INTAKE_DEPTH_M', 'intake_depth_m', 0.0)
+        self.SEAWATER_PIPE_LENGTH_M = seawater_value('SEAWATER_PIPE_LENGTH_M', 'pipe_length_m', 0.0)
+        self.SEAWATER_PIPE_DIAMETER_M = seawater_value('SEAWATER_PIPE_DIAMETER_M', 'pipe_diameter_m', 0.0)
+        self.SEAWATER_ROUGHNESS_M = seawater_value('SEAWATER_ROUGHNESS_M', 'roughness_m', 0.000045)
+        self.SEAWATER_STATIC_HEAD_M = seawater_value('SEAWATER_STATIC_HEAD_M', 'static_head_m', self.SEAWATER_INTAKE_DEPTH_M)
+        self.SEAWATER_FILTER_PRESSURE_DROP_PA = seawater_value('SEAWATER_FILTER_PRESSURE_DROP_PA', 'filter_pressure_drop_pa', 0.0)
+        self.SEAWATER_FOULING_PRESSURE_DROP_PA = seawater_value('SEAWATER_FOULING_PRESSURE_DROP_PA', 'fouling_pressure_drop_pa', 0.0)
+        self.SEAWATER_FIXED_PRESSURE_DROP_PA = seawater_value('SEAWATER_FIXED_PRESSURE_DROP_PA', 'fixed_pressure_drop_pa', self.SEAWATER_PUMP_PRESSURE_DROP_PA)
+        self.SEAWATER_VARIABLE_SPEED_PUMP = seawater_value('SEAWATER_VARIABLE_SPEED_PUMP', 'variable_speed_pump', True)
+        self.SEAWATER_PUMP_EFFICIENCY_CURVE = seawater_value('SEAWATER_PUMP_EFFICIENCY_CURVE', 'pump_efficiency_curve', None)
+        self.SEAWATER_CHILLED_WATER_DELTA_T_C = seawater_value('SEAWATER_CHILLED_WATER_DELTA_T_C', 'chilled_water_delta_t_c', self.SEAWATER_DELTA_T_C)
+        self.SEAWATER_CHILLED_WATER_DESIGN_FLOW_M3_S = seawater_value('SEAWATER_CHILLED_WATER_DESIGN_FLOW_M3_S', 'chilled_water_design_flow_m3_s', self.CW_WATER_FLOW_RATE)
+        self.SEAWATER_CHILLED_WATER_VARIABLE_SPEED_PUMP = seawater_value('SEAWATER_CHILLED_WATER_VARIABLE_SPEED_PUMP', 'chilled_water_variable_speed_pump', True)
+        self.SEAWATER_HEAT_PUMP_RATED_CAPACITY_W = seawater_value('SEAWATER_HEAT_PUMP_RATED_CAPACITY_W', 'heat_pump_rated_capacity_w', 0.0)
+        self.SEAWATER_HEAT_PUMP_RATED_COP = seawater_value('SEAWATER_HEAT_PUMP_RATED_COP', 'heat_pump_rated_cop', 6.0)
+        self.SEAWATER_HEAT_PUMP_MIN_PLR = seawater_value('SEAWATER_HEAT_PUMP_MIN_PLR', 'heat_pump_min_part_load_ratio', 0.10)
+        self.SEAWATER_CONTROL_HYSTERESIS_FRACTION = seawater_value('SEAWATER_CONTROL_HYSTERESIS_FRACTION', 'control_hysteresis_fraction', 0.05)
+        self.SEAWATER_PERFORMANCE_CURVE = seawater_value('SEAWATER_PERFORMANCE_CURVE', 'heat_pump_performance_curve', {})
 
 
 #References:
