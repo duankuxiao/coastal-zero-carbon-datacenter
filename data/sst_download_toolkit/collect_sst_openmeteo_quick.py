@@ -679,7 +679,7 @@ def summarize_output_missing_values(output: str) -> Dict[str, Any]:
     }
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
-CITY_MAP_FILE = ROOT_DIR / "data" / "target_city_map.csv"
+CITY_MAP_FILE = ROOT_DIR / "target_city_map.csv"
 
 def main() -> int:
     ap = argparse.ArgumentParser()

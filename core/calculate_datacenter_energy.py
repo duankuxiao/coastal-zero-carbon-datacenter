@@ -39,11 +39,11 @@ WORKLOAD_FILE = ROOT_DIR / "data" / "Workload" / "GoogleClusteData_CPU_Data_Hour
 CARBON_INTENSITY_FILE = (
     ROOT_DIR / "data" / "ci_download_toolkit" / "carbon_intensity_electricitymaps.csv"
 )
-EPW_DIR = ROOT_DIR / "data" / "epw_download_toolkit" / "epw_files"
+EPW_DIR = ROOT_DIR / "data" / "epw_download_toolkit" / "epw_2025_era5_only"  # "epw_files"
 SST_FILE = (
     ROOT_DIR / "data" / "sst_download_toolkit" / "sea_surface_temperature_2025_openmeteo.csv"
 )
-DEFAULT_OUTPUT_DIR = ROOT_DIR / "results"
+DEFAULT_OUTPUT_DIR = ROOT_DIR / "results" / "2025"
 
 
 @dataclass(frozen=True)

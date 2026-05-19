@@ -34,7 +34,6 @@ from core.calculate_datacenter_energy import (
 )
 from core.calculate_wind_capacity import WindResourceResult, calculate_wind_resource
 
-
 ROOT_DIR = Path(__file__).resolve().parent
 
 RESULT_METRICS = [
@@ -50,19 +49,19 @@ RESULT_METRICS = [
 
 
 def run_baseline(
-    workload_file: str | Path = WORKLOAD_FILE,
-    rated_it_power_kw: float = 20000.0,
-    idle_power_fraction: float = 0.3,
-    hours: int | None = 8760,
-    start_time: str | None = None,
-    time_alignment: str | None = "sst",
-    max_carbon_gap_hours: int = 6,
-    hub_height_m: float = 150.0,
-    wind_loss_fraction: float = 0.15,
-    wind_cut_in: float = 3.0,
-    wind_rated: float = 12.0,
-    wind_cut_out: float = 25.0,
-    output_dir: str | Path = DEFAULT_OUTPUT_DIR,
+        workload_file: str | Path = WORKLOAD_FILE,
+        rated_it_power_kw: float = 20000.0,
+        idle_power_fraction: float = 0.3,
+        hours: int | None = 8760,
+        start_time: str | None = None,
+        time_alignment: str | None = "sst",
+        max_carbon_gap_hours: int = 6,
+        hub_height_m: float = 150.0,
+        wind_loss_fraction: float = 0.15,
+        wind_cut_in: float = 3.0,
+        wind_rated: float = 12.0,
+        wind_cut_out: float = 25.0,
+        output_dir: str | Path = DEFAULT_OUTPUT_DIR,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """Run the strict-coastal baseline and save three result tables."""
     output_path = Path(output_dir)
@@ -74,7 +73,7 @@ def run_baseline(
     city_map = pd.read_csv(CITY_MAP_FILE)
     strict_coastal = city_map[
         city_map["Coastal class"].astype(str).str.strip().str.lower() == "strict coastal"
-    ]
+        ]
     cities = strict_coastal["City / metro"].dropna().astype(str).tolist()
 
     carbon_df = pd.read_csv(CARBON_INTENSITY_FILE)
@@ -161,8 +160,8 @@ def run_baseline(
 
 
 def _build_city_result_row(
-    energy: DataCenterEnergyResult,
-    wind: WindResourceResult,
+        energy: DataCenterEnergyResult,
+        wind: WindResourceResult,
 ) -> dict[str, object]:
     total_energy_mwh = energy.total_energy_kwh / 1000.0
     required_wind_capacity_mw = total_energy_mwh / wind.wind_generation_per_mw_mwh
@@ -198,10 +197,10 @@ def _build_city_result_row(
 
 
 def _build_summary_table(
-    air_results: pd.DataFrame,
-    seawater_results: pd.DataFrame,
-    rated_it_power_kw: float,
-    hours: int | None,
+        air_results: pd.DataFrame,
+        seawater_results: pd.DataFrame,
+        rated_it_power_kw: float,
+        hours: int | None,
 ) -> pd.DataFrame:
     rows = [
         _aggregate_result_rows(
@@ -231,11 +230,11 @@ def _build_summary_table(
 
 
 def _aggregate_result_rows(
-    label: str,
-    value_type: str,
-    results: pd.DataFrame,
-    rated_it_power_kw: float,
-    hours: int | None,
+        label: str,
+        value_type: str,
+        results: pd.DataFrame,
+        rated_it_power_kw: float,
+        hours: int | None,
 ) -> dict[str, object]:
     row: dict[str, object] = {
         "scope": label,
@@ -250,10 +249,10 @@ def _aggregate_result_rows(
 
 
 def _build_savings_pct_row(
-    air_row: dict[str, object],
-    seawater_row: dict[str, object],
-    rated_it_power_kw: float,
-    hours: int | None,
+        air_row: dict[str, object],
+        seawater_row: dict[str, object],
+        rated_it_power_kw: float,
+        hours: int | None,
 ) -> dict[str, object]:
     row: dict[str, object] = {
         "scope": "seawater_savings_pct_vs_air_source",
@@ -282,9 +281,9 @@ def _resolve_baseline_alignment(start_time: str | None, time_alignment: str | No
 
 
 def _valid_nonzero_city_series(
-    data: pd.DataFrame,
-    city: str,
-    label: str,
+        data: pd.DataFrame,
+        city: str,
+        label: str,
 ) -> tuple[bool, str]:
     if city not in data.columns:
         return False, f"{label} column does not exist"
