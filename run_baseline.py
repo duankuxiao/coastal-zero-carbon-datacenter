@@ -266,7 +266,7 @@ def main() -> None:
     parser.add_argument("--hours", type=int, default=8760)
     parser.add_argument(
         "--start-time",
-        default=None,
+        default="2025-01-01 00:00",
         help='Optional simulation start timestamp, for example "2025-01-01 00:00".',
     )
     parser.add_argument(
@@ -281,7 +281,7 @@ def main() -> None:
     parser.add_argument(
         "--max-carbon-gap-hours",
         type=int,
-        default=6,
+        default=12,
         help="Maximum consecutive missing carbon-intensity hours to interpolate after alignment.",
     )
     parser.add_argument(

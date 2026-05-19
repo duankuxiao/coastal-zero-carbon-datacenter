@@ -385,9 +385,9 @@ def _resolve_aligned_inputs(
     alignment = _resolve_time_alignment(cooling_type, time_alignment, start_time)
     sst_series: pd.Series | None = None
     sst_path = Path(sst_file)
-    if cooling_type == "seawater":
-        _print_progress("Reading sea-surface temperature data.", enabled=progress)
-        sst_series = _read_city_timeseries(sst_path, city, "sea surface temperature")
+    # if cooling_type == "seawater":
+    _print_progress("Reading sea-surface temperature data.", enabled=progress)
+    sst_series = _read_city_timeseries(sst_path, city, "sea surface temperature")
 
     timestamps = _select_simulation_timestamps(
         city=city,
@@ -410,24 +410,24 @@ def _resolve_aligned_inputs(
     )
     ambient_temperature = _map_epw_to_timestamps(ambient_epw, timestamps, city)
 
-    if cooling_type == "seawater":
-        if sst_series is None:
-            raise ValueError("Seawater cooling requires sea-surface temperature data.")
-        source_series = _align_value_series(
-            sst_series,
-            timestamps,
-            city=city,
-            filename=sst_path,
-            data_name="sea surface temperature",
-        )
-        source_temperature = source_series.to_numpy(dtype=float)
-        sst_start_time = _format_timestamp(source_series.index[0])
-        sst_end_time = _format_timestamp(source_series.index[-1])
-    else:
-        _print_progress("Using EPW dry-bulb temperature as cooling source temperature.", enabled=progress)
-        source_temperature = ambient_temperature
-        sst_start_time = None
-        sst_end_time = None
+    # if cooling_type == "seawater":
+    if sst_series is None:
+        raise ValueError("Seawater cooling requires sea-surface temperature data.")
+    source_series = _align_value_series(
+        sst_series,
+        timestamps,
+        city=city,
+        filename=sst_path,
+        data_name="sea surface temperature",
+    )
+    source_temperature = source_series.to_numpy(dtype=float)
+    sst_start_time = _format_timestamp(source_series.index[0])
+    sst_end_time = _format_timestamp(source_series.index[-1])
+    # else:
+    #     _print_progress("Using EPW dry-bulb temperature as cooling source temperature.", enabled=progress)
+    #     source_temperature = ambient_temperature
+    #     sst_start_time = None
+    #     sst_end_time = None
 
     metadata = {
         "simulation_start_time": _format_timestamp(timestamps[0]),
