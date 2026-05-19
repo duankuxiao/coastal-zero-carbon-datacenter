@@ -11,7 +11,7 @@ class CarbonLoadEnv(gym.Env):
             env_config={},
             future=True,
             n_vars_ci=4,
-            flexible_workload_ratio=0.2,
+            flexible_workload_ratio=0.3,
             n_vars_energy=0,
             n_vars_battery=1,
             test_mode=False,

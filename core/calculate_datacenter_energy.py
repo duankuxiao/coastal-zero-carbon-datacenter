@@ -188,8 +188,7 @@ def calculate_data_center_energy(
     source_temperature = aligned_inputs["source_temperature"]
     metadata = aligned_inputs["metadata"]
     n_hours = len(workload)
-    utilization_level = p_infer * u_infer * r_infer + (1-p_infer) * u_train * r_train  # 0.579
-
+    # utilization_level = p_infer * u_infer * r_infer + (1-p_infer) * u_train * r_train  # 0.579
     # it_power_kw = rated_it_power_kw * (
     #                (idle_power_fraction + (max_power_fraction - idle_power_fraction) * utilization_level))  # 0.60635
 
