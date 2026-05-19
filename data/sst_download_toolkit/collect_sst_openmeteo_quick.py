@@ -678,10 +678,12 @@ def summarize_output_missing_values(output: str) -> Dict[str, Any]:
         "missing_cells": sum(city_counts.values()),
     }
 
+ROOT_DIR = Path(__file__).resolve().parent.parent
+CITY_MAP_FILE = ROOT_DIR / "data" / "target_city_map.csv"
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--input", default="./data/target_city_map.csv")
+    ap.add_argument("--input", type=Path, default=CITY_MAP_FILE)
     ap.add_argument("--sheet", default="Country_city_map")
     ap.add_argument("--year", type=int, default=2025)
     ap.add_argument("--output", default="sea_surface_temperature_2025_openmeteo.csv")

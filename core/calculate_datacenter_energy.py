@@ -61,7 +61,9 @@ class DataCenterEnergyResult:
     rated_it_power_kw: float
     idle_power_fraction: float
     it_energy_kwh: float
+    it_carbon_emissions_kgco2: float
     cooling_energy_kwh: float
+    cooling_carbon_emissions_kgco2: float
     total_energy_kwh: float
     carbon_emissions_kgco2: float
     carbon_emissions_tco2: float
@@ -208,7 +210,9 @@ def calculate_data_center_energy(
     _print_progress("Aggregating energy and emissions results.", enabled=progress)
     total_power_kw = it_power_kw + cooling_power_kw
     # Carbon-intensity data is interpreted as gCO2/kWh.
-    emissions_kgco2 = float(np.nansum(total_power_kw * carbon_intensity / 1000.0))
+    it_emissions_kgco2 = float(np.nansum(it_power_kw * carbon_intensity / 1000.0))
+    cooling_emissions_kgco2 = float(np.nansum(cooling_power_kw * carbon_intensity / 1000.0))
+    emissions_kgco2 = it_emissions_kgco2 + cooling_emissions_kgco2
     it_energy_kwh = float(np.nansum(it_power_kw))
     cooling_energy_kwh = float(np.nansum(cooling_power_kw))
     total_energy_kwh = float(np.nansum(total_power_kw))
@@ -227,7 +231,9 @@ def calculate_data_center_energy(
         rated_it_power_kw=float(rated_it_power_kw),
         idle_power_fraction=float(idle_power_fraction),
         it_energy_kwh=it_energy_kwh,
+        it_carbon_emissions_kgco2=it_emissions_kgco2,
         cooling_energy_kwh=cooling_energy_kwh,
+        cooling_carbon_emissions_kgco2=cooling_emissions_kgco2,
         total_energy_kwh=total_energy_kwh,
         carbon_emissions_kgco2=emissions_kgco2,
         carbon_emissions_tco2=emissions_kgco2 / 1000.0,
@@ -385,9 +391,9 @@ def _resolve_aligned_inputs(
     alignment = _resolve_time_alignment(cooling_type, time_alignment, start_time)
     sst_series: pd.Series | None = None
     sst_path = Path(sst_file)
-    # if cooling_type == "seawater":
-    _print_progress("Reading sea-surface temperature data.", enabled=progress)
-    sst_series = _read_city_timeseries(sst_path, city, "sea surface temperature")
+    if cooling_type == "seawater" or alignment == "sst":
+        _print_progress("Reading sea-surface temperature data.", enabled=progress)
+        sst_series = _read_city_timeseries(sst_path, city, "sea surface temperature")
 
     timestamps = _select_simulation_timestamps(
         city=city,
@@ -410,24 +416,28 @@ def _resolve_aligned_inputs(
     )
     ambient_temperature = _map_epw_to_timestamps(ambient_epw, timestamps, city)
 
-    # if cooling_type == "seawater":
-    if sst_series is None:
-        raise ValueError("Seawater cooling requires sea-surface temperature data.")
-    source_series = _align_value_series(
-        sst_series,
-        timestamps,
-        city=city,
-        filename=sst_path,
-        data_name="sea surface temperature",
-    )
-    source_temperature = source_series.to_numpy(dtype=float)
-    sst_start_time = _format_timestamp(source_series.index[0])
-    sst_end_time = _format_timestamp(source_series.index[-1])
-    # else:
-    #     _print_progress("Using EPW dry-bulb temperature as cooling source temperature.", enabled=progress)
-    #     source_temperature = ambient_temperature
-    #     sst_start_time = None
-    #     sst_end_time = None
+    source_series: pd.Series | None = None
+    if sst_series is not None:
+        source_series = _align_value_series(
+            sst_series,
+            timestamps,
+            city=city,
+            filename=sst_path,
+            data_name="sea surface temperature",
+        )
+        sst_start_time = _format_timestamp(source_series.index[0])
+        sst_end_time = _format_timestamp(source_series.index[-1])
+    else:
+        sst_start_time = None
+        sst_end_time = None
+
+    if cooling_type == "seawater":
+        if source_series is None:
+            raise ValueError("Seawater cooling requires sea-surface temperature data.")
+        source_temperature = source_series.to_numpy(dtype=float)
+    else:
+        _print_progress("Using EPW dry-bulb temperature as cooling source temperature.", enabled=progress)
+        source_temperature = ambient_temperature
 
     metadata = {
         "simulation_start_time": _format_timestamp(timestamps[0]),
@@ -460,8 +470,6 @@ def _resolve_time_alignment(
         return "sst" if cooling_type == "seawater" else "latest"
     if time_alignment not in {"sst", "latest", "start_time"}:
         raise ValueError("time_alignment must be one of: sst, latest, start_time.")
-    if time_alignment == "sst" and cooling_type != "seawater":
-        raise ValueError("time_alignment='sst' is only valid for seawater cooling.")
     return time_alignment
 
 
@@ -476,8 +484,8 @@ def _select_simulation_timestamps(
     sst_series: pd.Series | None,
 ) -> pd.DatetimeIndex:
     if alignment == "sst":
-        if cooling_type != "seawater" or sst_series is None:
-            raise ValueError("SST alignment requires seawater cooling and SST data.")
+        if sst_series is None:
+            raise ValueError("SST alignment requires sea-surface temperature data.")
         n_hours = _resolve_requested_hours(hours, workload_length, len(sst_series))
         return pd.DatetimeIndex(sst_series.index[:n_hours])
 
