@@ -29,7 +29,7 @@ data/epw_download_toolkit/_download_cache/
 data/epw_download_toolkit/epw_files.zip
 data/ci_download_toolkit/api_cache_json/
 data/ci_download_toolkit/target_long_csv/
-data/ci_download_toolkit/epw_2025_era5_only/
+data/epw_download_toolkit/epw_2025_era5_only/
 
 # Local outputs; keep directories tracked only if placeholder files are added later
 results/*
