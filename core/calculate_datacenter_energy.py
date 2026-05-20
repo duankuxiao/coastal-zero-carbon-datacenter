@@ -43,7 +43,7 @@ EPW_DIR = ROOT_DIR / "data" / "epw_download_toolkit" / "epw_2025_era5_only"  # "
 SST_FILE = (
     ROOT_DIR / "data" / "sst_download_toolkit" / "sea_surface_temperature_2025_openmeteo.csv"
 )
-DEFAULT_OUTPUT_DIR = ROOT_DIR / "results" / "2025"
+DEFAULT_OUTPUT_DIR = ROOT_DIR / "results"
 
 
 @dataclass(frozen=True)
