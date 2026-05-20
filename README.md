@@ -6,7 +6,7 @@
 
 沿海数据中心零碳潜力评估工具包，用于比较常规空气源冷却与海水源冷却在不同城市中的能耗、PUE、碳排放表现，并进一步估算满足数据中心年度用电量所需的海上风电装机容量。
 
-项目结合全球城市/都市圈清单、EPW 气象数据、Open-Meteo 海表温度、Electricity Maps 电网碳强度、ERA5 海上风电气象数据和数据中心工作负载曲线，支撑“沿海数据中心 + 海水冷却 + 海上风电/绿电”的年度能耗和减排潜力分析。
+项目结合全球城市/都市圈清单、2025 年 ERA5-only AMY EPW 气象数据、Open-Meteo 海表温度、Electricity Maps 电网碳强度、ERA5 海上风电气象数据和数据中心工作负载曲线，支撑“沿海数据中心 + 海水冷却 + 海上风电/绿电”的年度能耗和减排潜力分析。
 
 ## 功能概览
 
@@ -14,11 +14,12 @@
 - 空气源/常规冷却与海水源冷却对比。
 - 严格沿海城市批量基准测试。
 - 基于 timestamp 将碳强度与 SST、EPW 温度、workload 自动对齐。
+- 气象参数文件统一为 2025 年 ERA5 AMY EPW 数据，减少典型气象年与实际年份混用带来的对比偏差。
 - baseline 对比默认使用 SST 时间窗口，确保空气源和海水源使用同一时期碳排放因子。
 - 详细海水源热泵模型，覆盖自然冷却、混合冷却和机械热泵三种运行模式。
 - 输出服务器/冷却系统分项能耗与分项碳排放。
 - 基于 ERA5 海上风电数据估算满足年度总电耗所需的风电装机容量。
-- 提供 EPW、海表温度、碳强度和海上风电输入数据下载与校验脚本。
+- 提供 EPW 生成、海表温度、碳强度和海上风电输入数据下载与校验脚本。
 
 ## 目录结构
 
@@ -39,7 +40,7 @@
 ├── data/
 │   ├── target_city_map.csv                    # 220 个城市/都市圈及沿海分类
 │   ├── Workload/                              # CPU 工作负载曲线
-│   ├── epw_download_toolkit/                  # EPW 下载、校验脚本与气象文件
+│   ├── epw_download_toolkit/                  # 2025 ERA5-only EPW 生成脚本与气象文件
 │   ├── sst_download_toolkit/                  # 海表温度采集脚本与数据
 │   ├── ci_download_toolkit/                   # 电网碳强度采集脚本与数据
 │   └── offshore_wind_download_toolkit/        # ERA5 海上风电输入数据与下载清单
@@ -53,7 +54,8 @@
 
 - `data/target_city_map.csv`：城市/都市圈、区域、经纬度、沿海分类、代表海点坐标。
 - `data/Workload/*.csv`：小时级 CPU 负载曲线，要求包含 `cpu_load` 列，取值通常在 0 到 1 之间。
-- `data/epw_download_toolkit/epw_files/*.epw`：220 个城市/都市圈匹配的 EPW/TMYx 气象文件。
+- `data/epw_download_toolkit/target_city_map_epw_coordinates_checked.csv`：220 个城市/都市圈的 EPW 生成坐标、CAMS FOV 判定和目标 EPW 文件名。
+- `data/epw_download_toolkit/epw_2025_era5_only/*.epw`：2025 年 ERA5-only AMY EPW 气象文件。当前工作区目录和 zip 包包含 209 个已生成 EPW 文件；manifest 覆盖 220 个城市，可继续补生成缺失城市。核心代码读取解压后的目录，不直接读取 zip。
 - `data/sst_download_toolkit/sea_surface_temperature_2025_openmeteo.csv`：非 Inland 城市的小时级海表温度，单位为 degC。
 - `data/ci_download_toolkit/carbon_intensity_electricitymaps.csv`：小时级电网碳强度宽表，单位按脚本约定为 gCO2eq/kWh。
 - `data/offshore_wind_download_toolkit/*.nc`：严格沿海城市代表海点的 ERA5 风电气象输入。当前部分文件扩展名为 `.nc`，实际是 ZIP 容器，代码会自动读取内部 netCDF 文件。
@@ -75,10 +77,10 @@ pip install numpy pandas
 pip install xarray netCDF4
 ```
 
-如需重新下载 EPW 文件，还需要：
+如需重新生成 2025 年 ERA5-only EPW 气象文件，还需要配置 Copernicus CDS API 凭据，并安装：
 
 ```bash
-pip install requests
+pip install cdsapi xarray netCDF4 h5netcdf pvlib timezonefinder tqdm
 ```
 
 Electricity Maps 数据下载需要设置 API Token。
@@ -189,10 +191,10 @@ baseline_summary_<rated_power>_<hours>.csv
 
 - `seawater` 默认使用 `--time-alignment sst`，以 SST 文件的 timestamp 作为主时间轴，并把碳强度精确对齐到同一小时。
 - `air_source` 默认使用 `--time-alignment latest`，使用碳强度文件中最新的 `hours` 小时时间窗口。
-- `run_baseline.py` 默认使用 SST 时间窗口对比空气源和海水源，保证两种冷却方式使用同一时期碳排放因子；空气源温度仍按该 timestamp 映射到 EPW 典型气象年。
+- `run_baseline.py` 默认使用 SST 时间窗口对比空气源和海水源，保证两种冷却方式使用同一时期碳排放因子；空气源温度仍按该 timestamp 映射到 2025 年 ERA5 AMY EPW。
 - 指定 `--start-time "2025-01-01 00:00"` 时会自动切换为 `start_time` 模式，从该时刻开始截取 `hours` 小时。
 - 碳强度缺少少量小时会在对齐后按时间插值，默认最大连续缺口为 6 小时，可通过 `--max-carbon-gap-hours` 调整；超过阈值会报错。
-- EPW 干球温度仍按 8760 小时典型气象年读取，并根据目标 timestamp 的 day-of-year/hour 映射到仿真时间轴。
+- EPW 干球温度按 2025 年 AMY EPW 的 8760 小时读取，并根据目标 timestamp 的 day-of-year/hour 映射到仿真时间轴；当仿真窗口位于 2025 年时，空气源气象输入与 SST、碳强度处于同一年份基准。
 
 ### 海水源热泵模型
 
@@ -251,7 +253,13 @@ python data/ci_download_toolkit/download_electricitymaps_10y_hourly.py ^
 
 ```bash
 cd data/epw_download_toolkit
-python download_epw_from_manifest.py --save-epw-dir --save-validated-manifest
+python batch_generate_epw_era5_only_global.py ^
+  --input target_city_map_epw_coordinates_checked.csv ^
+  --year 2025 ^
+  --out-dir epw_2025_era5_only ^
+  --cache-dir era5_only_cache ^
+  --status-csv epw_era5_only_status.csv ^
+  --zip-output epw_2025_era5_only.zip
 ```
 
 ### 海上风电 ERA5 输入
