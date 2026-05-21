@@ -1,4 +1,4 @@
-"""Compatibility wrapper for :mod:`optimization.battery_env_fwd_view`."""
+"""Compatibility wrapper for the legacy battery environment module name."""
 
 from __future__ import annotations
 

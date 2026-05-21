@@ -145,25 +145,36 @@ boundary expansion or avoided-emissions accounting method is explicitly used.
 The reusable optimizer is in:
 
 ```text
-core/optimize_zero_carbon.py
+optimization/optimize_zero_carbon.py
 ```
 
-Example CLI:
+The single-city optimizer remains in `optimization/optimize_zero_carbon.py`.
+The batch runner in `scripts/run_optimize.py` now runs all strict-coastal
+cities. Example batch configuration:
+
+```python
+_, _, output_files = run_strict_coastal_optimizations(
+    cooling="seawater",
+    objectives=("min-grid-mwh", "min-grid-co2"),
+    rated_it_power_kw=20000.0,
+    battery_capacity_mwh=535.4,
+    battery_roundtrip_efficiency=0.97,
+    grid_import_limit_mw=25.0,
+    battery_charge_limit_mw=25.0,
+    battery_discharge_limit_mw=25.0,
+    load_shift_fraction=0.3,
+    output_dir=DEFAULT_OUTPUT_DIR,
+)
+```
+
+Run it with:
 
 ```bash
-python -m core.optimize_zero_carbon \
-  --city Shanghai \
-  --cooling seawater \
-  --wind-capacity-mw 75.21370150314945 \
-  --wind-nc-file data/offshore_wind_download_toolkit/OW_006_China_Shanghai_era5_atmos_2025-01-01_2025-12-31.nc \
-  --battery-capacity-mwh 535.4 \
-  --battery-roundtrip-efficiency 0.97 \
-  --grid-import-limit-mw 25 \
-  --battery-charge-limit-mw 25 \
-  --battery-discharge-limit-mw 25 \
-  --load-shift-fraction 0.3 \
-  --objective min-grid-co2
+python -m scripts.run_optimize
 ```
 
-Use `--objective min-grid-mwh` to minimize electricity purchased from the grid
-instead of grid-purchase emissions.
+Set `objectives=("min-grid-mwh", "min-grid-co2")` in the batch runner to compare
+minimum grid-purchase and minimum grid-emissions dispatch results.
+
+The batch runner writes city-level and summary CSV files only; it does not save
+8760-hour dispatch tables for every city.

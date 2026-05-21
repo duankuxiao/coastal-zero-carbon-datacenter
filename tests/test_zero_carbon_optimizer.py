@@ -1,7 +1,9 @@
 import numpy as np
 import pytest
 
-from core.optimize_zero_carbon import (
+pytest.importorskip("scipy")
+
+from optimization.optimize_zero_carbon import (
     OptimizationInputs,
     optimize_dispatch,
 )

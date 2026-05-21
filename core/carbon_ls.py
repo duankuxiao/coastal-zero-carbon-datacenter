@@ -1,4 +1,4 @@
-"""Compatibility wrapper for :mod:`optimization.load_shift`."""
+"""Compatibility wrapper for the legacy load-shifting module name."""
 
 from __future__ import annotations
 

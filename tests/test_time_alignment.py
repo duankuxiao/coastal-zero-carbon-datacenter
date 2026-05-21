@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-import core.calculate_datacenter_energy as calc
+import energy.calculate_datacenter_energy as calc
 
 
 CITY = "TestCity"

@@ -23,7 +23,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from core.calculate_datacenter_energy import (
+from energy.calculate_datacenter_energy import (
     CARBON_INTENSITY_FILE,
     CITY_MAP_FILE,
     DEFAULT_OUTPUT_DIR,
@@ -32,7 +32,7 @@ from core.calculate_datacenter_energy import (
     DataCenterEnergyResult,
     calculate_data_center_energy,
 )
-from core.calculate_wind_capacity import WindResourceResult, calculate_wind_resource
+from renewables.calculate_wind_capacity import WindResourceResult, calculate_wind_resource
 
 ROOT_DIR = Path(__file__).resolve().parent
 
