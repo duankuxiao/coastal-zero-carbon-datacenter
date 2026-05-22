@@ -5,8 +5,8 @@ for every city marked ``Strict coastal`` in ``data/target_city_map.csv``.
 
 It intentionally does not save 8760-hour per-city dispatch tables. Outputs are:
 
-1. one city/objective result table;
-2. one aggregate objective comparison table.
+1. one city/scenario/objective result table;
+2. one aggregate scenario comparison table.
 
 Edit the arguments in ``main()`` before running if you need a different cooling
 mode, objective list, battery setting, or output directory.
@@ -34,11 +34,14 @@ RESULT_METRICS = [
     "datacenter_total_energy_mwh",
     "annual_demand_mwh",
     "annual_wind_mwh",
+    "wind_coverage_mwh",
     "grid_purchase_mwh",
     "grid_purchase_co2_kg",
     "average_grid_carbon_intensity_g_per_kwh",
     "renewable_physical_coverage_fraction",
     "wind_curtailment_mwh",
+    "battery_configured_capacity_mwh",
+    "battery_required_capacity_mwh",
     "battery_charge_mwh",
     "battery_discharge_mwh",
     "battery_conversion_loss_mwh",
@@ -52,6 +55,20 @@ RESULT_METRICS = [
     "max_hourly_battery_charge_mw",
     "max_hourly_battery_discharge_mw",
 ]
+SCENARIO_ORDER = ("baseline", "load_shift", "load_shift_battery")
+SCENARIO_LABELS = {
+    "baseline": "baseline",
+    "load_shift": "load shift",
+    "load_shift_battery": "load shift + battery",
+}
+HOURLY_RESULT_KEYS = {
+    "optimized_demand_mwh",
+    "grid_purchase_hourly_mwh",
+    "wind_curtailment_hourly_mwh",
+    "battery_soc_mwh",
+    "battery_charge_hourly_mwh",
+    "battery_discharge_hourly_mwh",
+}
 
 
 def run_strict_coastal_optimizations(
@@ -115,39 +132,58 @@ def run_strict_coastal_optimizations(
             print(f"  skipped: {exc}")
             continue
 
-        for objective in objective_list:
-            try:
-                result = optimization(
-                    city=city,
-                    cooling=cooling,
-                    wind_capacity_mw=wind_capacity.required_wind_capacity_mw,
-                    wind_nc_file=wind_capacity.wind_nc_file,
-                    workload_file=workload_file,
-                    rated_it_power_kw=rated_it_power_kw,
-                    battery_capacity_mwh=battery_capacity_mwh,
-                    battery_roundtrip_efficiency=battery_roundtrip_efficiency,
-                    grid_import_limit_mw=grid_import_limit_mw,
-                    battery_charge_limit_mw=battery_charge_limit_mw,
-                    battery_discharge_limit_mw=battery_discharge_limit_mw,
-                    load_shift_fraction=load_shift_fraction,
-                    hours=hours,
-                    start_time=start_time,
-                    time_alignment=time_alignment,
-                    max_carbon_gap_hours=max_carbon_gap_hours,
-                    hub_height_m=hub_height_m,
-                    wind_loss_fraction=wind_loss_fraction,
-                    wind_cut_in=wind_cut_in,
-                    wind_rated=wind_rated,
-                    wind_cut_out=wind_cut_out,
-                    objective=objective,
-                    include_hourly=False,
-                    output_results=False,
-                )
-                rows.append(_city_result_row(city_row, wind_capacity, result, objective))
-                print(f"  {objective}: grid={result['grid_purchase_mwh']:.2f} MWh")
-            except Exception as exc:
-                rows.append(_failed_row(city_row, cooling, objective, str(exc), wind_capacity))
-                print(f"  {objective} failed: {exc}")
+        for scenario_config in _scenario_configs(
+            load_shift_fraction=load_shift_fraction,
+            battery_capacity_mwh=battery_capacity_mwh,
+            battery_charge_limit_mw=battery_charge_limit_mw,
+            battery_discharge_limit_mw=battery_discharge_limit_mw,
+        ):
+            scenario = str(scenario_config["scenario"])
+            for objective in objective_list:
+                try:
+                    result = optimization(
+                        city=city,
+                        cooling=cooling,
+                        wind_capacity_mw=wind_capacity.required_wind_capacity_mw,
+                        wind_nc_file=wind_capacity.wind_nc_file,
+                        workload_file=workload_file,
+                        rated_it_power_kw=rated_it_power_kw,
+                        battery_capacity_mwh=scenario_config["battery_capacity_mwh"],
+                        battery_roundtrip_efficiency=battery_roundtrip_efficiency,
+                        grid_import_limit_mw=grid_import_limit_mw,
+                        battery_charge_limit_mw=scenario_config["battery_charge_limit_mw"],
+                        battery_discharge_limit_mw=scenario_config["battery_discharge_limit_mw"],
+                        load_shift_fraction=scenario_config["load_shift_fraction"],
+                        hours=hours,
+                        start_time=start_time,
+                        time_alignment=time_alignment,
+                        max_carbon_gap_hours=max_carbon_gap_hours,
+                        hub_height_m=hub_height_m,
+                        wind_loss_fraction=wind_loss_fraction,
+                        wind_cut_in=wind_cut_in,
+                        wind_rated=wind_rated,
+                        wind_cut_out=wind_cut_out,
+                        objective=objective,
+                        include_hourly=True,
+                        output_results=False,
+                    )
+                    rows.append(_city_result_row(city_row, wind_capacity, result, objective, scenario_config))
+                    print(
+                        f"  {scenario}/{objective}: "
+                        f"grid={result['grid_purchase_mwh']:.2f} MWh"
+                    )
+                except Exception as exc:
+                    rows.append(
+                        _failed_row(
+                            city_row,
+                            cooling,
+                            objective,
+                            str(exc),
+                            wind_capacity,
+                            scenario_config,
+                        )
+                    )
+                    print(f"  {scenario}/{objective} failed: {exc}")
 
     city_results = pd.DataFrame(rows)
     summary = _build_summary_table(city_results, objective_list, cooling, hours)
@@ -172,8 +208,10 @@ def _city_result_row(
     wind_capacity,
     result: dict[str, object],
     objective: str,
+    scenario_config: dict[str, object],
 ) -> dict[str, object]:
     row = _base_city_row(city_row)
+    row.update(_scenario_metadata(scenario_config))
     row.update(
         {
             "status": "ok",
@@ -193,6 +231,12 @@ def _city_result_row(
         }
     )
     row.update(result)
+    row["wind_coverage_mwh"] = _wind_coverage_mwh(row)
+    row["battery_required_capacity_mwh"] = (
+        _battery_required_capacity_mwh(result) if bool(row["battery_enabled"]) else 0.0
+    )
+    for key in HOURLY_RESULT_KEYS:
+        row.pop(key, None)
     row.pop("csv_files", None)
     return row
 
@@ -203,8 +247,10 @@ def _failed_row(
     objective: str,
     error: str,
     wind_capacity=None,
+    scenario_config: dict[str, object] | None = None,
 ) -> dict[str, object]:
     row = _base_city_row(city_row)
+    row.update(_scenario_metadata(scenario_config))
     row.update(
         {
             "status": "failed",
@@ -226,6 +272,72 @@ def _failed_row(
     return row
 
 
+def _scenario_configs(
+    *,
+    load_shift_fraction: float,
+    battery_capacity_mwh: float,
+    battery_charge_limit_mw: float | None,
+    battery_discharge_limit_mw: float | None,
+) -> tuple[dict[str, object], ...]:
+    return (
+        {
+            "scenario": "baseline",
+            "load_shift_enabled": False,
+            "battery_enabled": False,
+            "load_shift_fraction": 0.0,
+            "battery_capacity_mwh": 0.0,
+            "battery_charge_limit_mw": 0.0,
+            "battery_discharge_limit_mw": 0.0,
+        },
+        {
+            "scenario": "load_shift",
+            "load_shift_enabled": True,
+            "battery_enabled": False,
+            "load_shift_fraction": load_shift_fraction,
+            "battery_capacity_mwh": 0.0,
+            "battery_charge_limit_mw": 0.0,
+            "battery_discharge_limit_mw": 0.0,
+        },
+        {
+            "scenario": "load_shift_battery",
+            "load_shift_enabled": True,
+            "battery_enabled": battery_capacity_mwh > 0.0,
+            "load_shift_fraction": load_shift_fraction,
+            "battery_capacity_mwh": battery_capacity_mwh,
+            "battery_charge_limit_mw": battery_charge_limit_mw,
+            "battery_discharge_limit_mw": battery_discharge_limit_mw,
+        },
+    )
+
+
+def _scenario_metadata(scenario_config: dict[str, object] | None) -> dict[str, object]:
+    if scenario_config is None:
+        return {
+            "scenario": "all",
+            "scenario_label": "all",
+            "load_shift_enabled": "",
+            "battery_enabled": "",
+            "configured_load_shift_fraction": math.nan,
+            "battery_configured_capacity_mwh": math.nan,
+            "battery_charge_limit_mw": math.nan,
+            "battery_discharge_limit_mw": math.nan,
+            "battery_required_capacity_mwh": math.nan,
+        }
+
+    scenario = str(scenario_config["scenario"])
+    return {
+        "scenario": scenario,
+        "scenario_label": SCENARIO_LABELS.get(scenario, scenario),
+        "load_shift_enabled": bool(scenario_config["load_shift_enabled"]),
+        "battery_enabled": bool(scenario_config["battery_enabled"]),
+        "configured_load_shift_fraction": float(scenario_config["load_shift_fraction"]),
+        "battery_configured_capacity_mwh": float(scenario_config["battery_capacity_mwh"]),
+        "battery_charge_limit_mw": scenario_config["battery_charge_limit_mw"],
+        "battery_discharge_limit_mw": scenario_config["battery_discharge_limit_mw"],
+        "battery_required_capacity_mwh": 0.0,
+    }
+
+
 def _base_city_row(city_row: pd.Series) -> dict[str, object]:
     return {
         "country_area": city_row.get("Country/Area", ""),
@@ -242,27 +354,18 @@ def _build_summary_table(
     cooling: str,
     hours: int,
 ) -> pd.DataFrame:
-    ok = city_results[city_results["status"] == "ok"].copy()
-    rows = [_aggregate_objective(ok, objective, cooling, hours) for objective in objectives]
+    ok = city_results[city_results["status"] == "ok"].copy() if "status" in city_results else pd.DataFrame()
+    rows: list[dict[str, object]] = []
 
-    by_objective = {str(row["objective"]): row for row in rows}
-    if "min-grid-mwh" in by_objective and "min-grid-co2" in by_objective:
-        rows.append(
-            _comparison_row(
-                by_objective["min-grid-mwh"],
-                by_objective["min-grid-co2"],
-                scope="min_grid_co2_minus_min_grid_mwh",
-                value_type="difference",
-            )
-        )
-        rows.append(
-            _comparison_row(
-                by_objective["min-grid-mwh"],
-                by_objective["min-grid-co2"],
-                scope="min_grid_co2_pct_change_vs_min_grid_mwh",
-                value_type="percent",
-            )
-        )
+    for objective in objectives:
+        objective_rows = [
+            _aggregate_scenario(ok, objective, scenario, cooling, hours)
+            for scenario in SCENARIO_ORDER
+        ]
+        baseline = next(row for row in objective_rows if row["scenario"] == "baseline")
+        for row in objective_rows:
+            _add_baseline_savings(row, baseline)
+            rows.append(row)
 
     failed_count = int((city_results["status"] == "failed").sum()) if "status" in city_results else 0
     rows.append(
@@ -270,6 +373,8 @@ def _build_summary_table(
             "scope": "failed_runs",
             "value_type": "count",
             "objective": "all",
+            "scenario": "all",
+            "scenario_label": "all",
             "cooling_type": cooling,
             "included_city_count": failed_count,
             "hours_per_city": hours,
@@ -278,17 +383,26 @@ def _build_summary_table(
     return pd.DataFrame(rows)
 
 
-def _aggregate_objective(
+def _aggregate_scenario(
     ok_results: pd.DataFrame,
     objective: str,
+    scenario: str,
     cooling: str,
     hours: int,
 ) -> dict[str, object]:
-    subset = ok_results[ok_results["objective"] == objective]
+    if ok_results.empty:
+        subset = ok_results
+    else:
+        subset = ok_results[
+            (ok_results["objective"] == objective)
+            & (ok_results["scenario"] == scenario)
+        ]
     row: dict[str, object] = {
-        "scope": objective.replace("-", "_"),
+        "scope": scenario,
         "value_type": "absolute",
         "objective": objective,
+        "scenario": scenario,
+        "scenario_label": SCENARIO_LABELS.get(scenario, scenario),
         "cooling_type": cooling,
         "included_city_count": int(subset["city"].nunique()) if not subset.empty else 0,
         "hours_per_city": hours,
@@ -300,8 +414,9 @@ def _aggregate_objective(
     grid_co2 = float(row.get("grid_purchase_co2_kg", 0.0) or 0.0)
     demand = float(row.get("annual_demand_mwh", 0.0) or 0.0)
     shifted_down = float(row.get("shifted_down_mwh", 0.0) or 0.0)
+    row["wind_coverage_mwh"] = demand - grid_mwh
     row["average_grid_carbon_intensity_g_per_kwh"] = grid_co2 / grid_mwh if grid_mwh else 0.0
-    row["renewable_physical_coverage_fraction"] = 1.0 - grid_mwh / demand if demand else math.nan
+    row["renewable_physical_coverage_fraction"] = row["wind_coverage_mwh"] / demand if demand else math.nan
     row["load_movement_budget_used_fraction"] = shifted_down / demand if demand else math.nan
     return row
 
@@ -321,33 +436,47 @@ def _aggregate_metric(results: pd.DataFrame, metric: str) -> float:
     return float(values.sum())
 
 
-def _comparison_row(
-    base: dict[str, object],
+def _add_baseline_savings(row: dict[str, object], baseline: dict[str, object]) -> None:
+    energy_savings = _metric_savings(baseline, row, "datacenter_total_energy_mwh")
+    co2_savings = _metric_savings(baseline, row, "grid_purchase_co2_kg")
+    grid_savings = _metric_savings(baseline, row, "grid_purchase_mwh")
+    row["energy_savings_mwh_vs_baseline"] = energy_savings
+    row["energy_savings_pct_vs_baseline"] = _pct(energy_savings, baseline.get("datacenter_total_energy_mwh", 0.0))
+    row["co2_savings_kg_vs_baseline"] = co2_savings
+    row["co2_savings_pct_vs_baseline"] = _pct(co2_savings, baseline.get("grid_purchase_co2_kg", 0.0))
+    row["grid_purchase_savings_mwh_vs_baseline"] = grid_savings
+    row["grid_purchase_savings_pct_vs_baseline"] = _pct(grid_savings, baseline.get("grid_purchase_mwh", 0.0))
+
+
+def _metric_savings(
+    baseline: dict[str, object],
     other: dict[str, object],
-    *,
-    scope: str,
-    value_type: str,
-) -> dict[str, object]:
-    row: dict[str, object] = {
-        "scope": scope,
-        "value_type": value_type,
-        "objective": "min-grid-co2_vs_min-grid-mwh",
-        "cooling_type": other.get("cooling_type", ""),
-        "included_city_count": min(
-            int(base.get("included_city_count", 0) or 0),
-            int(other.get("included_city_count", 0) or 0),
-        ),
-        "hours_per_city": other.get("hours_per_city", ""),
-    }
-    for metric in RESULT_METRICS:
-        base_value = float(base.get(metric, 0.0) or 0.0)
-        other_value = float(other.get(metric, 0.0) or 0.0)
-        diff = other_value - base_value
-        if value_type == "percent":
-            row[metric] = diff / base_value * 100.0 if not math.isclose(base_value, 0.0) else math.nan
-        else:
-            row[metric] = diff
-    return row
+    metric: str,
+) -> float:
+    return float(baseline.get(metric, 0.0) or 0.0) - float(other.get(metric, 0.0) or 0.0)
+
+
+def _pct(numerator: float, denominator: object) -> float:
+    denominator_float = float(denominator or 0.0)
+    if math.isclose(denominator_float, 0.0):
+        return math.nan
+    return numerator / denominator_float * 100.0
+
+
+def _wind_coverage_mwh(row: dict[str, object]) -> float:
+    demand = float(row.get("annual_demand_mwh", row.get("datacenter_total_energy_mwh", 0.0)) or 0.0)
+    grid_purchase = float(row.get("grid_purchase_mwh", 0.0) or 0.0)
+    return demand - grid_purchase
+
+
+def _battery_required_capacity_mwh(result: dict[str, object]) -> float:
+    soc = result.get("battery_soc_mwh")
+    if soc is None:
+        return 0.0
+    values = pd.to_numeric(pd.Series(soc), errors="coerce").dropna()
+    if values.empty:
+        return 0.0
+    return float(values.max() - values.min())
 
 
 def _resolve_output_dir(path: str | Path) -> Path:

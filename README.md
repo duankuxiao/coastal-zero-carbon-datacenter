@@ -320,5 +320,28 @@ python data/offshore_wind_download_toolkit/download_era5_strict_coastal_wind_inp
 - `core/` 目录仅作为旧导入路径兼容层，新代码应优先从 `energy/`、`renewables/`、`optimization/` 和 `scripts/` 导入。
 - 批量 baseline 中缺少有效碳强度、SST 或风电输入数据的城市会被跳过，并在命令行输出跳过原因。
 - 批量优化默认不保存每个城市的 8760 小时明细，避免输出文件过多；如需单城市小时级结果，请调用 `run_optimization(..., output_results=True, include_hourly=True)`。
+
+### `scripts/run_optimize.py` 结果字段说明
+
+批量优化会在汇总表中按 `objective` 和 `scenario` 对比三种场景：
+
+- `baseline`：不启用负荷调整，不启用蓄电池。该场景用于给出未优化时的数据中心能耗、碳排放、风电覆盖量、弃风量、风电覆盖率和购电量。
+- `load_shift`：只启用负荷调整，不启用蓄电池。汇总表会同时给出相对 `baseline` 的能耗、碳排放和购电量节约值及节约比例。
+- `load_shift_battery`：同时启用负荷调整和蓄电池。汇总表会给出所需蓄电池容量，并给出相对 `baseline` 的能耗、碳排放和购电量节约值及节约比例。
+
+关键结果列含义如下：
+
+- `datacenter_total_energy_mwh` / `annual_demand_mwh`：数据中心年度总用电需求，单位 MWh。负荷调整只改变小时分布，全年需求保持不变。
+- `grid_purchase_mwh`：从电网购电量，单位 MWh。
+- `grid_purchase_co2_kg`：购电对应碳排放，单位 kg CO2。
+- `annual_wind_mwh`：配置风电容量对应的年度风电发电量，单位 MWh。
+- `wind_coverage_mwh`：由风电覆盖的数据中心用电量，按 `annual_demand_mwh - grid_purchase_mwh` 计算，单位 MWh。
+- `wind_curtailment_mwh`：弃风量，单位 MWh。
+- `renewable_physical_coverage_fraction`：风电覆盖率，按 `wind_coverage_mwh / annual_demand_mwh` 计算。
+- `battery_configured_capacity_mwh`：该场景配置给优化器的蓄电池容量，单位 MWh。
+- `battery_required_capacity_mwh`：优化结果实际用到的蓄电池能量容量，按蓄电池 SOC 最大值与最小值之差计算，单位 MWh。
+- `energy_savings_mwh_vs_baseline` / `energy_savings_pct_vs_baseline`：相对 `baseline` 的数据中心能耗节约值和比例。
+- `co2_savings_kg_vs_baseline` / `co2_savings_pct_vs_baseline`：相对 `baseline` 的碳排放节约值和比例。
+- `grid_purchase_savings_mwh_vs_baseline` / `grid_purchase_savings_pct_vs_baseline`：相对 `baseline` 的购电量节约值和比例。
 - 年度绿电覆盖不等同于小时级 24/7 零碳。小时级匹配需要结合风电时序、储能、购电约束和负荷转移约束解释。
 - 仓库包含较大的 CSV、EPW 和 ERA5 数据文件，公开发布前应确认数据授权、引用方式和文件体积是否符合需求。

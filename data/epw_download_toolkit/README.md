@@ -1,31 +1,60 @@
-# EPW 2025 ERA5-only 生成工具包
+# ERA5-only EPW generation toolkit
 
-本工具包用于为项目城市生成统一年份的 EPW 气象输入。当前版本不再使用 Climate.OneBuilding TMYx 典型气象年文件，而是基于 ERA5 小时级再分析数据生成 2025 年 Actual Meteorological Year (AMY) EPW 文件，便于与 2025 年海表温度、碳强度和负载时间窗口做一致对比。
+This folder stores and regenerates 2025 Actual Meteorological Year (AMY) EPW weather files for the project city list.
 
-ERA5-only 方案使用全球可用的 ERA5 变量生成温度、湿度、气压、风速、云量、降水和太阳辐射等字段，避免 CAMS Radiation Service 卫星视场限制导致部分美洲、印度和智利城市无法生成辐射数据的问题。
+## Data Source
 
-## 文件说明
+- Primary meteorological source: ERA5 hourly data from the Copernicus Climate Data Store / ECMWF
+- Dataset: ERA5 hourly data on single levels from 1940 to present
+- CDS page: https://cds.climate.copernicus.eu/datasets/reanalysis-era5-single-levels
+- ERA5 documentation: https://confluence.ecmwf.int/display/CKB/ERA5%3A%2Bdata%2Bdocumentation
+- EPW format reference: https://climate.onebuilding.org/papers/EnergyPlus_Weather_File_Format.pdf
+- Local generated files: `epw_2025_era5_only/*.epw`
 
-- `batch_generate_epw_era5_only_global.py`：批量下载 ERA5 数据并生成 2025 年 AMY EPW 文件；支持 CDS 返回 ZIP、异常文本文件检测、坏缓存重试，以及时间序列和网格型 ERA5 NetCDF 两种输入。
-- `target_city_map_epw_coordinates_checked.csv`：220 个城市/都市圈的 EPW 生成坐标、生成方法建议、CAMS FOV 判定和目标 EPW 文件名。
-- `cams_fov_problem_cities.csv`：CAMS 辐射视场可能失败的城市清单，用于记录为什么改用 ERA5-only 全局生成方法。
-- `epw_2025_era5_only/`：当前随附的 2025 年 ERA5 AMY EPW 文件目录。
-- `epw_2025_era5_only.zip`：包含当前已生成 EPW 文件和 `epw_era5_only_status.csv` 状态表的压缩包。
-- `README.md`：本说明。
+The generated EPW files are not typical meteorological year files. They are 2025 AMY files generated from ERA5 hourly reanalysis so that ambient weather, sea-surface temperature, grid carbon intensity, workload, and offshore wind inputs can be aligned to the same study year.
 
-当前 manifest 覆盖 220 个城市/都市圈；本目录下当前工作区的 `epw_2025_era5_only/` 和 zip 包包含 209 个已生成 EPW 文件。缺失城市可按下方命令继续生成或重跑。
+## Why This Dataset
 
-## 环境依赖
+ERA5-only EPW files are used for consistency across all global cities. Earlier EPW workflows often use TMY or CAMS solar-radiation services. TMY files represent a statistically typical year and cannot be directly aligned with 2025 SST, carbon intensity, and wind data. CAMS radiation time-series can fail outside satellite field-of-view regions, which affects many cities in the Americas and other regions.
 
-生成 EPW 需要 Python 3.12 或兼容环境，并需要配置 Copernicus CDS API 凭据。
+This toolkit keeps the city coordinates fixed and generates all required weather fields from globally available ERA5 variables. This avoids moving cities to artificial coordinates merely to satisfy a radiation product's coverage limits.
+
+## Files
+
+- `batch_generate_epw_era5_only_global.py`: batch downloader and EPW generator.
+- `target_city_map_epw_coordinates_checked.csv`: city coordinates, EPW output coordinates, CAMS field-of-view flags, and target EPW filenames.
+- `cams_fov_problem_cities.csv`: records why the project avoids the CAMS-dependent workflow for affected cities.
+- `epw_2025_era5_only/`: generated 2025 ERA5 AMY EPW files.
+- `epw_2025_era5_only.zip`: archive containing generated EPW files and status metadata.
+
+At the time of this repository snapshot, `epw_2025_era5_only/` contains 209 generated `.epw` files.
+
+## ERA5 Variables
+
+The generator downloads ERA5 single-level variables including:
+
+- `2m_temperature`
+- `2m_dewpoint_temperature`
+- `surface_pressure`
+- `10m_u_component_of_wind`
+- `10m_v_component_of_wind`
+- `total_cloud_cover`
+- `surface_solar_radiation_downwards`
+- `total_sky_direct_solar_radiation_at_surface`
+- `total_precipitation`
+- `snow_depth`
+
+ERA5 radiation accumulations are converted from `J/m2` to `Wh/m2`. Direct normal radiation is estimated from ERA5 direct horizontal radiation and solar zenith angle. This approximation is acceptable for the data-center cooling model because ambient temperature, humidity, and wind dominate the cooling load; it should be separately validated before using these EPW files for high-accuracy solar-energy studies.
+
+## Usage
+
+Install dependencies and configure Copernicus CDS credentials before running:
 
 ```bash
 pip install cdsapi xarray netCDF4 h5netcdf pandas numpy pvlib timezonefinder tqdm
 ```
 
-## 使用方式
-
-在本目录运行：
+Generate all files:
 
 ```bash
 python batch_generate_epw_era5_only_global.py ^
@@ -37,42 +66,32 @@ python batch_generate_epw_era5_only_global.py ^
   --zip-output epw_2025_era5_only.zip
 ```
 
-常用选项：
+Useful options:
 
-- `--limit N`：只生成前 N 个城市，便于测试。
-- `--overwrite`：覆盖已有 EPW 和缓存文件。
-- `--fallback-area`：ERA5 time-series 请求失败时，退回按月下载城市附近小范围网格数据。
-- `--apply-time-zone-to-data`：按标准 UTC offset 平移数据时间戳；默认保留 UTC 小时序列。
+- `--limit N`: generate only the first `N` cities for a quick test.
+- `--overwrite`: regenerate existing EPW and cache files.
+- `--fallback-area`: if the ERA5 time-series request fails, download monthly ERA5 area files around the city.
+- `--apply-time-zone-to-data`: shift weather timestamps to standard local time. The project default keeps UTC-like hourly alignment.
 
-## 运行后输出
+## Outputs and Validation
 
-- `epw_2025_era5_only/*.epw`：按 `EPW filename` 命名的 2025 年 AMY EPW 文件，格式为 `序号_国家_城市_2025_AMY_ERA5.epw`。
-- `epw_era5_only_status.csv`：逐城市下载、生成、校验状态，以及实际 EPW 路径、缓存路径和异常信息。
-- `epw_2025_era5_only.zip`：包含已生成 EPW 文件和状态表的压缩包。
+The script writes:
 
-核心能耗计算代码读取 `epw_2025_era5_only/` 目录中的 `.epw` 文件；如果工作区中只有 `epw_2025_era5_only.zip`，请先解压到同名目录后再运行仿真。
+- `epw_2025_era5_only/*.epw`
+- `epw_era5_only_status.csv`
+- `epw_2025_era5_only.zip`
 
-## 校验规则
+Validation checks include:
 
-脚本会检查：
+- 8760 hourly rows for non-leap-year 2025.
+- no February 29 rows.
+- numeric dry-bulb temperature, relative humidity, and pressure fields.
+- broad plausibility checks for temperature, humidity, and pressure.
 
-1. EPW 数据行是否为 8760 行；
-2. 是否存在 2 月 29 日；
-3. 第 7 列（索引 6）室外干球温度是否可解析为数值，单位 degC；
-4. 第 9 列（索引 8）相对湿度是否可解析为数值，单位 %；
-5. 第 10 列（索引 9）气压是否可解析为数值，单位 Pa；
-6. 干球温度、相对湿度和气压是否落在宽松的合理范围内。
+## Paper Method Note
 
-## 数据生成方法
+A concise methods description can be:
 
-- 坐标优先使用 `target_city_map_epw_coordinates_checked.csv` 中的 `EPW latitude` / `EPW longitude`。
-- 太阳辐射来自 ERA5 的 `surface_solar_radiation_downwards` 和 `total_sky_direct_solar_radiation_at_surface`，单位从 J/m2 转为 Wh/m2。
-- DNI 由 ERA5 直接水平辐射和太阳天顶角估算得到；该近似主要用于保证全球城市可生成一致气象输入。
-- EPW header 中记录 `ERA5 (ECMWF)`、2025 年数据周期和 ERA5-only 生成说明。
-- 默认生成非闰年 8760 小时数据，与项目中 2025 年 SST 和年度仿真窗口一致。
+> City weather files were generated as 2025 Actual Meteorological Year EPW files using ERA5 hourly single-level reanalysis. ERA5 was used instead of TMY weather files to maintain a common 2025 time axis across weather, sea-surface temperature, grid carbon intensity, workload, and offshore wind data. A global ERA5-only radiation workflow was used to avoid CAMS satellite field-of-view failures while preserving the intended city coordinates.
 
-## 注意事项
-
-- ERA5-only EPW 是实际气象年数据，不是 TMYx 典型气象年。用于跨城市对比时，所有城市使用同一目标年份 2025，时间基准更一致。
-- CAMS FOV 问题由辐射产品覆盖范围引起，不应通过把城市坐标强行移动到远处卫星视场内解决；本工具保留城市坐标并改用 ERA5 全球辐射变量。
-- `era5_only_cache/` 是本地下载缓存，可在需要重新下载时清理或配合 `--overwrite` 使用。
+When publishing, cite the CDS ERA5 dataset, ECMWF/Copernicus attribution guidance, and the EnergyPlus EPW file format reference if the EPW conversion process is described.
