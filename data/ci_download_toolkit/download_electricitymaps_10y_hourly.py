@@ -541,7 +541,7 @@ def write_long_series(path: Path, target: QueryTarget, series: Dict[str, Optiona
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Loop over Electricity Maps /v3/carbon-intensity/past-range to download hourly carbon intensity for the past 10 years."
+        description="Loop over Electricity Maps /carbon-intensity/past-range to download hourly carbon intensity for the past 10 years."
     )
     parser.add_argument("--manifest", required=True, help="City manifest CSV. Required columns: city_name/output_column, latitude, longitude; optional electricitymaps_zone.")
     parser.add_argument("--output-dir", default="ci_download_toolkit", help="Output directory.")
