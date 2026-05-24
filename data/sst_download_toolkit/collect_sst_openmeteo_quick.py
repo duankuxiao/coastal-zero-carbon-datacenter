@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Collect hourly sea_surface_temperature for non-Inland cities in sheet
-Country_city_map of the input workbook.
+Collect hourly sea_surface_temperature for toolkit-ready cities in the
+City_manifest sheet of data/coastal_datacenter_city_manifest.xlsx.
 
 Output format:
   timestamp,<City / metro 1>,<City / metro 2>,...
@@ -33,6 +33,7 @@ from typing import Dict, Iterable, List, Tuple, Any
 
 NS = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
 SCRIPT_DIR = Path(__file__).resolve().parent
+MANIFEST_SHEET_NAME = "City_manifest"
 
 
 def format_elapsed(seconds: float) -> str:
@@ -108,10 +109,11 @@ def read_xlsx_sheet_rows(path: str, sheet_name: str) -> List[Dict[str, Any]]:
                 break
         if target is None:
             raise ValueError(f"Worksheet relationship not found for sheet: {sheet_name}")
-        if not target.startswith("worksheets/"):
-            target = "worksheets/" + target
+        target = target.lstrip("/")
+        if not target.startswith("xl/"):
+            target = "xl/" + target
 
-        sheet = ET.fromstring(z.read("xl/" + target))
+        sheet = ET.fromstring(z.read(target))
         rows: List[List[Any]] = []
         for row in sheet.findall(NS + "sheetData/" + NS + "row"):
             cells: Dict[int, Any] = {}
@@ -121,7 +123,9 @@ def read_xlsx_sheet_rows(path: str, sheet_name: str) -> List[Dict[str, Any]]:
                 cell_type = c.attrib.get("t")
                 v = c.find(NS + "v")
                 val: Any = None
-                if v is not None:
+                if cell_type == "inlineStr":
+                    val = "".join(t.text or "" for t in c.iter(NS + "t"))
+                elif v is not None:
                     raw = v.text
                     if cell_type == "s":
                         val = shared[int(raw)]
@@ -153,41 +157,62 @@ def clean_header(value: Any) -> Any:
     return value
 
 
-def read_csv_rows(path: str) -> List[Dict[str, Any]]:
-    with open(path, "r", encoding="utf-8-sig", newline="") as f:
-        reader = csv.DictReader(f)
-        return [
-            {clean_header(k): v for k, v in row.items()}
-            for row in reader
-        ]
+def is_toolkit_ready(row: Dict[str, Any]) -> bool:
+    return str(row.get("toolkit_ready", "")).strip().lower() in {"1", "true", "yes", "y"}
+
+
+def required_text(row: Dict[str, Any], column: str, source_row: int) -> str:
+    value = row.get(column)
+    text = "" if value is None else str(value).strip()
+    if not text:
+        raise ValueError(f"Missing required column value '{column}' at workbook row {source_row}")
+    return text
+
+
+def required_coord(row: Dict[str, Any], column: str, source_row: int, min_value: float, max_value: float) -> float:
+    text = required_text(row, column, source_row)
+    try:
+        value = float(text)
+    except ValueError as exc:
+        raise ValueError(f"Invalid coordinate '{column}' at workbook row {source_row}: {text}") from exc
+    if not min_value <= value <= max_value:
+        raise ValueError(f"Coordinate '{column}' out of range at workbook row {source_row}: {value}")
+    return value
 
 
 def load_targets(input_xlsx: str, sheet_name: str) -> List[Dict[str, Any]]:
-    input_path = str(input_xlsx)
-    if input_path.lower().endswith(".csv"):
-        rows = read_csv_rows(input_path)
-    else:
-        rows = read_xlsx_sheet_rows(input_path, sheet_name)
+    rows = read_xlsx_sheet_rows(str(input_xlsx), sheet_name)
+    if not rows:
+        raise ValueError(f"Manifest is empty: {input_xlsx}")
+    required_columns = [
+        "country",
+        "datacentermap_market",
+        "toolkit_ready",
+        "sea_sst_lat",
+        "sea_sst_lon",
+    ]
+    missing = [c for c in required_columns if c not in rows[0]]
+    if missing:
+        raise ValueError(f"Workbook sheet {sheet_name} is missing required columns: {', '.join(missing)}")
+
     targets = []
-    for r in rows:
-        if r.get("Coastal class") == "Inland":
+    for source_row, r in enumerate(rows, start=2):
+        if not is_toolkit_ready(r):
             continue
-        lat = r.get("Representative sea-point latitude")
-        lon = r.get("Representative sea-point longitude")
-        if lat is None or lon is None:
-            continue
-        city = str(r.get("City / metro")).strip()
+        city = required_text(r, "datacentermap_market", source_row)
         targets.append({
-            "country_area": r.get("Country/Area"),
-            "region": r.get("Region"),
+            "country_area": required_text(r, "country", source_row),
+            "region": "",
             "city_name": city,
-            "coastal_class": r.get("Coastal class"),
-            "sea_latitude": float(lat),
-            "sea_longitude": float(lon),
-            "backup_sea_latitude": r.get("Backup sea-point latitude"),
-            "backup_sea_longitude": r.get("Backup sea-point longitude"),
+            "coastal_class": r.get("selection_status"),
+            "sea_latitude": required_coord(r, "sea_sst_lat", source_row, -90.0, 90.0),
+            "sea_longitude": required_coord(r, "sea_sst_lon", source_row, -180.0, 180.0),
+            "backup_sea_latitude": None,
+            "backup_sea_longitude": None,
         })
-    # Protect against duplicate CSV column names; input currently has unique City / metro names.
+    if not targets:
+        raise ValueError(f"No toolkit-ready rows found in workbook sheet {sheet_name}: {input_xlsx}")
+    # Protect against duplicate output column names.
     seen = set()
     for t in targets:
         name = t["city_name"]
@@ -679,12 +704,12 @@ def summarize_output_missing_values(output: str) -> Dict[str, Any]:
     }
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
-CITY_MAP_FILE = ROOT_DIR / "target_city_map.csv"
+CITY_MANIFEST_FILE = ROOT_DIR / "coastal_datacenter_city_manifest.xlsx"
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--input", type=Path, default=CITY_MAP_FILE)
-    ap.add_argument("--sheet", default="Country_city_map")
+    ap.add_argument("--input", type=Path, default=CITY_MANIFEST_FILE)
+    ap.add_argument("--sheet", default=MANIFEST_SHEET_NAME)
     ap.add_argument("--year", type=int, default=2025)
     ap.add_argument("--output", default="sea_surface_temperature_2025_openmeteo.csv")
     ap.add_argument("--targets-output", default="coastal_city_sea_points.csv")

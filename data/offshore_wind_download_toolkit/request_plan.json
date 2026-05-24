@@ -1,0 +1,21 @@
+{
+  "input": "D:\\coastal_data_center\\Code\\data\\coastal_datacenter_city_manifest.xlsx",
+  "start": "2025-01-01",
+  "end": "2025-12-31",
+  "mode": "timeseries",
+  "variable_set": "recommended",
+  "atmospheric_variables": [
+    "100m_u_component_of_wind",
+    "100m_v_component_of_wind",
+    "10m_u_component_of_wind",
+    "10m_v_component_of_wind",
+    "2m_temperature",
+    "surface_pressure",
+    "2m_dewpoint_temperature",
+    "mean_sea_level_pressure",
+    "boundary_layer_height"
+  ],
+  "wave_variables": [],
+  "n_points": 96,
+  "manifest": "D:\\coastal_data_center\\Code\\data\\offshore_wind_download_toolkit\\strict_coastal_download_manifest.csv"
+}

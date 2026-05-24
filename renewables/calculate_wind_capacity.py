@@ -33,7 +33,7 @@ from energy.calculate_datacenter_energy import (
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 OFFSHORE_WIND_DIR = ROOT_DIR / "data" / "offshore_wind_download_toolkit"
-WIND_MANIFEST_FILE = OFFSHORE_WIND_DIR / "strict_coastal_offshore_wind_points_manifest.csv"
+WIND_MANIFEST_FILE = OFFSHORE_WIND_DIR / "strict_coastal_download_manifest.csv"
 
 CoolingType = Literal["air_source", "seawater"]
 
@@ -373,7 +373,16 @@ def _resolve_wind_input(
             wind_path = ROOT_DIR / wind_path
         return point_id or _point_id_from_filename(wind_path) or "custom", wind_path
 
+    if not WIND_MANIFEST_FILE.exists():
+        raise FileNotFoundError(f"Offshore wind manifest does not exist: {WIND_MANIFEST_FILE}")
     manifest = pd.read_csv(WIND_MANIFEST_FILE)
+    required_columns = {"point_id", "city_metro"}
+    missing_columns = required_columns.difference(manifest.columns)
+    if missing_columns:
+        raise ValueError(
+            f"Offshore wind manifest {WIND_MANIFEST_FILE} is missing required columns: "
+            f"{', '.join(sorted(missing_columns))}"
+        )
     if point_id:
         matches = manifest[manifest["point_id"].astype(str).str.lower() == point_id.lower()]
     else:

@@ -18,9 +18,11 @@ import json
 import math
 import re
 import sys
+import xml.etree.ElementTree as ET
+import zipfile
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Iterable, Literal
+from typing import Any, Iterable, Literal
 
 import numpy as np
 import pandas as pd
@@ -34,16 +36,149 @@ CoolingType = Literal["air_source", "seawater"]
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 DC_CONFIG_FILE = ROOT_DIR / "utils" / "dc_config.json"
-CITY_MAP_FILE = ROOT_DIR / "data" / "target_city_map.csv"
+CITY_MAP_FILE = ROOT_DIR / "data" / "coastal_datacenter_city_manifest.xlsx"
+CITY_MANIFEST_SHEET = "City_manifest"
 WORKLOAD_FILE = ROOT_DIR / "data" / "Workload" / "GoogleClusteData_CPU_Data_Hourly_1.csv"
 CARBON_INTENSITY_FILE = (
-    ROOT_DIR / "data" / "ci_download_toolkit" / "carbon_intensity_electricitymaps.csv"
+    ROOT_DIR / "data" / "ci_download_toolkit" / "city_grid_carbon_intensity_electricitymaps_10y.csv"
 )
 EPW_DIR = ROOT_DIR / "data" / "epw_download_toolkit" / "epw_2025_era5_only"  # "epw_files"
 SST_FILE = (
     ROOT_DIR / "data" / "sst_download_toolkit" / "sea_surface_temperature_2025_openmeteo.csv"
 )
 DEFAULT_OUTPUT_DIR = ROOT_DIR / "results"
+XLSX_NS = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
+XLSX_REL_ID = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id"
+
+
+def _clean_header(value: object) -> str:
+    return str(value).replace("\ufeff", "").strip()
+
+
+def _xlsx_col_index(cell_ref: str) -> int:
+    match = re.match(r"([A-Z]+)", cell_ref)
+    if not match:
+        return 0
+    index = 0
+    for char in match.group(1):
+        index = index * 26 + ord(char) - 64
+    return index - 1
+
+
+def _read_xlsx_sheet_rows(path: Path, sheet_name: str) -> list[dict[str, Any]]:
+    """Read a plain worksheet from xlsx using only the standard library."""
+    with zipfile.ZipFile(path) as archive:
+        shared: list[str] = []
+        if "xl/sharedStrings.xml" in archive.namelist():
+            root = ET.fromstring(archive.read("xl/sharedStrings.xml"))
+            for item in root.findall(XLSX_NS + "si"):
+                shared.append("".join(text.text or "" for text in item.iter(XLSX_NS + "t")))
+
+        workbook = ET.fromstring(archive.read("xl/workbook.xml"))
+        sheets = workbook.find(XLSX_NS + "sheets")
+        relationship_id = None
+        for sheet in [] if sheets is None else sheets:
+            if sheet.attrib.get("name") == sheet_name:
+                relationship_id = sheet.attrib[XLSX_REL_ID]
+                break
+        if relationship_id is None:
+            raise ValueError(f"Sheet not found: {sheet_name}")
+
+        relationships = ET.fromstring(archive.read("xl/_rels/workbook.xml.rels"))
+        target = None
+        for relationship in relationships:
+            if relationship.attrib.get("Id") == relationship_id:
+                target = relationship.attrib["Target"].lstrip("/")
+                break
+        if target is None:
+            raise ValueError(f"Worksheet relationship not found for sheet: {sheet_name}")
+        if not target.startswith("xl/"):
+            target = "xl/" + target
+
+        worksheet = ET.fromstring(archive.read(target))
+        rows: list[list[Any]] = []
+        for row in worksheet.findall(XLSX_NS + "sheetData/" + XLSX_NS + "row"):
+            cells: dict[int, Any] = {}
+            max_column = -1
+            for cell in row.findall(XLSX_NS + "c"):
+                column_index = _xlsx_col_index(cell.attrib.get("r", "A1"))
+                cell_type = cell.attrib.get("t")
+                value_node = cell.find(XLSX_NS + "v")
+                value: Any = None
+                if cell_type == "inlineStr":
+                    value = "".join(text.text or "" for text in cell.iter(XLSX_NS + "t"))
+                elif value_node is not None:
+                    raw = value_node.text
+                    if cell_type == "s":
+                        value = shared[int(raw)]
+                    elif cell_type == "b":
+                        value = bool(int(raw))
+                    else:
+                        try:
+                            value = float(raw)
+                            if value.is_integer():
+                                value = int(value)
+                        except Exception:
+                            value = raw
+                cells[column_index] = value
+                max_column = max(max_column, column_index)
+            rows.append([cells.get(i) for i in range(max_column + 1)])
+
+    if not rows:
+        return []
+    header = [_clean_header(value) for value in rows[0]]
+    output: list[dict[str, Any]] = []
+    for row in rows[1:]:
+        output.append({
+            header[i]: row[i] if i < len(row) else None
+            for i in range(len(header))
+            if header[i] not in {"", "None"}
+        })
+    return output
+
+
+def _is_toolkit_ready(value: object) -> bool:
+    return str(value).strip().lower() in {"1", "true", "yes", "y"}
+
+
+def _manifest_text(value: object) -> str:
+    if value is None or pd.isna(value):
+        return ""
+    return str(value).strip()
+
+
+def load_city_manifest(
+    city_map_file: str | Path = CITY_MAP_FILE,
+    sheet_name: str = CITY_MANIFEST_SHEET,
+) -> pd.DataFrame:
+    manifest_path = Path(city_map_file)
+    rows = _read_xlsx_sheet_rows(manifest_path, sheet_name)
+    if not rows:
+        raise ValueError(f"Manifest is empty: {manifest_path}")
+
+    required_columns = [
+        "repo_city_index",
+        "epw_filename_prefix",
+        "country",
+        "datacentermap_market",
+        "selection_status",
+        "toolkit_ready",
+    ]
+    missing = [column for column in required_columns if column not in rows[0]]
+    if missing:
+        raise ValueError(
+            f"Workbook sheet {sheet_name} is missing required columns: {', '.join(missing)}"
+        )
+
+    manifest = pd.DataFrame(rows)
+    manifest = manifest[manifest["toolkit_ready"].map(_is_toolkit_ready)].copy()
+    manifest["datacentermap_market"] = manifest["datacentermap_market"].map(_manifest_text)
+    manifest["country"] = manifest["country"].map(_manifest_text)
+    manifest["epw_filename_prefix"] = manifest["epw_filename_prefix"].map(_manifest_text)
+    manifest = manifest[manifest["datacentermap_market"] != ""]
+    if manifest.empty:
+        raise ValueError(f"No toolkit-ready rows found in workbook sheet {sheet_name}: {manifest_path}")
+    return manifest.reset_index(drop=True)
 
 
 @dataclass(frozen=True)
@@ -89,9 +224,9 @@ class DataCenterEnergyResult:
 
 
 def list_available_cities(city_map_file: Path = CITY_MAP_FILE) -> list[str]:
-    """Return city names from data/target_city_map.csv."""
-    city_map = pd.read_csv(city_map_file)
-    return city_map["City / metro"].dropna().astype(str).tolist()
+    """Return toolkit-ready city names from the coastal data-center manifest."""
+    city_map = load_city_manifest(city_map_file)
+    return city_map["datacentermap_market"].dropna().astype(str).tolist()
 
 
 def save_result_csv(
@@ -138,7 +273,7 @@ def calculate_data_center_energy(
     """Calculate annual or partial-period data-center energy and emissions.
 
     Args:
-        city: City name from data/target_city_map.csv, for example "Shanghai".
+        city: City name from data/coastal_datacenter_city_manifest.xlsx, for example "Shanghai".
         cooling_type: "air_source" or "seawater".
         workload_file: CSV file containing a numeric 'cpu_load' column.
         rated_it_power_kw: IT load at full utilization in kW.
@@ -729,12 +864,25 @@ def _format_timestamp(value: object) -> str | None:
 
 
 def _find_epw_file(city: str) -> Path:
-    city_map = pd.read_csv(CITY_MAP_FILE)
-    match = city_map.loc[city_map["City / metro"] == city].index
-    if len(match) == 0:
+    city_map = load_city_manifest()
+    matches = city_map[city_map["datacentermap_market"] == city]
+    if matches.empty:
+        normalized_city = city.lower()
+        matches = city_map[
+            city_map["datacentermap_market"].astype(str).str.lower() == normalized_city
+        ]
+    if matches.empty:
         raise ValueError(f"Could not find {city!r} in {CITY_MAP_FILE}.")
 
-    city_index_prefix = f"{int(match[0]) + 1:03d}_"
+    row = matches.iloc[0]
+    city_index_prefix = str(row.get("epw_filename_prefix") or "").strip()
+    if not city_index_prefix:
+        try:
+            city_index_prefix = f"{int(float(row['repo_city_index'])):03d}_"
+        except Exception as exc:
+            raise ValueError(f"Missing EPW filename prefix for {city!r} in {CITY_MAP_FILE}.") from exc
+    if not city_index_prefix.endswith("_"):
+        city_index_prefix = f"{city_index_prefix}_"
     matching_files = sorted(EPW_DIR.glob(f"{city_index_prefix}*.epw"))
     if not matching_files:
         raise FileNotFoundError(
@@ -1091,7 +1239,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Calculate data-center energy and carbon emissions for a selected city."
     )
-    parser.add_argument("--city", help="City name from data/target_city_map.csv.")
+    parser.add_argument("--city", help="City name from data/coastal_datacenter_city_manifest.xlsx.")
     parser.add_argument(
         "--cooling",
         default="air_source",

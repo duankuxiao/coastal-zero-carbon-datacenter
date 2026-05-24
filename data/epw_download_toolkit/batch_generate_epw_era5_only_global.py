@@ -20,15 +20,13 @@ This script avoids that limitation by using ERA5 global variables only:
 
 Input
 -----
-A CSV table containing:
-- EPW latitude
-- EPW longitude
-- Country/Area
-- City / metro
-- optionally EPW filename
-
-The coordinate table generated for this project is:
-    target_city_map_epw_coordinates_checked.csv
+The `City_manifest` sheet in `data/coastal_datacenter_city_manifest.xlsx`,
+using:
+- city_epw_lat
+- city_epw_lon
+- country
+- datacentermap_market
+- epw_filename_prefix
 
 Notes
 -----
@@ -47,7 +45,8 @@ conda activate epw2025
 pip install cdsapi xarray netCDF4 h5netcdf pandas numpy pvlib timezonefinder tqdm
 
 python batch_generate_epw_era5_only_global.py ^
-    --input target_city_map_epw_coordinates_checked.csv ^
+    --input ../coastal_datacenter_city_manifest.xlsx ^
+    --sheet City_manifest ^
     --year 2025 ^
     --out-dir epw_2025_era5_only ^
     --cache-dir era5_only_cache ^
@@ -67,9 +66,10 @@ import re
 import shutil
 import sys
 import time
+import xml.etree.ElementTree as ET
 import zipfile
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -110,6 +110,12 @@ ERA5_VARIABLES = [
     "snow_depth",
 ]
 
+XLSX_NS = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
+XLSX_REL_ID = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id"
+MANIFEST_SHEET_NAME = "City_manifest"
+ROOT_DIR = Path(__file__).resolve().parent.parent
+CITY_MANIFEST_FILE = ROOT_DIR / "coastal_datacenter_city_manifest.xlsx"
+
 # xarray variable names in downloaded ERA5 NetCDF files are usually short names.
 VAR_ALIASES: Dict[str, List[str]] = {
     "t2m": ["t2m", "2m_temperature"],
@@ -130,6 +136,149 @@ def safe_filename(text: str, max_len: int = 120) -> str:
     text = re.sub(r"[^\w\u4e00-\u9fff.-]+", "_", text, flags=re.UNICODE)
     text = text.strip("._-")
     return (text[:max_len] or "city")
+
+
+def clean_header(value: object) -> str:
+    return str(value).replace("\ufeff", "").strip()
+
+
+def xlsx_col_index(cell_ref: str) -> int:
+    match = re.match(r"([A-Z]+)", cell_ref)
+    if not match:
+        return 0
+    n = 0
+    for ch in match.group(1):
+        n = n * 26 + ord(ch) - 64
+    return n - 1
+
+
+def read_xlsx_sheet_rows(path: Path, sheet_name: str) -> List[Dict[str, Any]]:
+    """Read a plain worksheet from xlsx using only the standard library."""
+    with zipfile.ZipFile(path) as z:
+        shared: List[str] = []
+        if "xl/sharedStrings.xml" in z.namelist():
+            root = ET.fromstring(z.read("xl/sharedStrings.xml"))
+            for si in root.findall(XLSX_NS + "si"):
+                shared.append("".join(t.text or "" for t in si.iter(XLSX_NS + "t")))
+
+        workbook = ET.fromstring(z.read("xl/workbook.xml"))
+        sheets = workbook.find(XLSX_NS + "sheets")
+        rid = None
+        for sheet in [] if sheets is None else sheets:
+            if sheet.attrib.get("name") == sheet_name:
+                rid = sheet.attrib[XLSX_REL_ID]
+                break
+        if rid is None:
+            raise ValueError(f"Sheet not found: {sheet_name}")
+
+        rels = ET.fromstring(z.read("xl/_rels/workbook.xml.rels"))
+        target = None
+        for rel in rels:
+            if rel.attrib.get("Id") == rid:
+                target = rel.attrib["Target"].lstrip("/")
+                break
+        if target is None:
+            raise ValueError(f"Worksheet relationship not found for sheet: {sheet_name}")
+        if not target.startswith("xl/"):
+            target = "xl/" + target
+
+        sheet = ET.fromstring(z.read(target))
+        rows: List[List[Any]] = []
+        for row in sheet.findall(XLSX_NS + "sheetData/" + XLSX_NS + "row"):
+            cells: Dict[int, Any] = {}
+            max_col = -1
+            for cell in row.findall(XLSX_NS + "c"):
+                col_idx = xlsx_col_index(cell.attrib.get("r", "A1"))
+                cell_type = cell.attrib.get("t")
+                value_node = cell.find(XLSX_NS + "v")
+                value: Any = None
+                if cell_type == "inlineStr":
+                    value = "".join(t.text or "" for t in cell.iter(XLSX_NS + "t"))
+                elif value_node is not None:
+                    raw = value_node.text
+                    if cell_type == "s":
+                        value = shared[int(raw)]
+                    elif cell_type == "b":
+                        value = bool(int(raw))
+                    else:
+                        try:
+                            value = float(raw)
+                            if value.is_integer():
+                                value = int(value)
+                        except Exception:
+                            value = raw
+                cells[col_idx] = value
+                max_col = max(max_col, col_idx)
+            rows.append([cells.get(i) for i in range(max_col + 1)])
+
+    if not rows:
+        return []
+    header = [clean_header(v) for v in rows[0]]
+    out: List[Dict[str, Any]] = []
+    for row in rows[1:]:
+        out.append({
+            header[i]: row[i] if i < len(row) else None
+            for i in range(len(header))
+            if header[i] not in {"", "None"}
+        })
+    return out
+
+
+def is_toolkit_ready(row: Dict[str, Any]) -> bool:
+    return str(row.get("toolkit_ready", "")).strip().lower() in {"1", "true", "yes", "y"}
+
+
+def required_text(row: Dict[str, Any], column: str, source_row: int) -> str:
+    value = row.get(column)
+    text = "" if value is None else str(value).strip()
+    if not text:
+        raise ValueError(f"Missing required column value '{column}' at workbook row {source_row}")
+    return text
+
+
+def required_coord(row: Dict[str, Any], column: str, source_row: int, min_value: float, max_value: float) -> float:
+    text = required_text(row, column, source_row)
+    try:
+        value = float(text)
+    except ValueError as exc:
+        raise ValueError(f"Invalid coordinate '{column}' at workbook row {source_row}: {text}") from exc
+    if not min_value <= value <= max_value:
+        raise ValueError(f"Coordinate '{column}' out of range at workbook row {source_row}: {value}")
+    return value
+
+
+def load_city_manifest(path: Path, sheet_name: str) -> pd.DataFrame:
+    rows = read_xlsx_sheet_rows(path, sheet_name)
+    if not rows:
+        raise ValueError(f"Manifest is empty: {path}")
+    required_columns = [
+        "repo_city_index",
+        "epw_filename_prefix",
+        "country",
+        "datacentermap_market",
+        "toolkit_ready",
+        "city_epw_lat",
+        "city_epw_lon",
+    ]
+    missing = [c for c in required_columns if c not in rows[0]]
+    if missing:
+        raise ValueError(f"Workbook sheet {sheet_name} is missing required columns: {', '.join(missing)}")
+
+    normalized: List[Dict[str, Any]] = []
+    for source_row, row in enumerate(rows, start=2):
+        if not is_toolkit_ready(row):
+            continue
+        normalized.append({
+            **row,
+            "source_row": source_row,
+            "country": required_text(row, "country", source_row),
+            "datacentermap_market": required_text(row, "datacentermap_market", source_row),
+            "city_epw_lat": required_coord(row, "city_epw_lat", source_row, -90.0, 90.0),
+            "city_epw_lon": required_coord(row, "city_epw_lon", source_row, -180.0, 180.0),
+        })
+    if not normalized:
+        raise ValueError(f"No toolkit-ready rows found in workbook sheet {sheet_name}: {path}")
+    return pd.DataFrame(normalized).reset_index(drop=True)
 
 
 def get_first_weekday_of_year(year: int) -> str:
@@ -642,7 +791,8 @@ def validate_epw(path: Path) -> dict:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--input", default="target_city_map_epw_coordinates_checked.csv")
+    parser.add_argument("--input", type=Path, default=CITY_MANIFEST_FILE)
+    parser.add_argument("--sheet", default=MANIFEST_SHEET_NAME)
     parser.add_argument("--year", type=int, default=2025)
     parser.add_argument("--out-dir", default="epw_2025_era5_only")
     parser.add_argument("--cache-dir", default="era5_only_cache")
@@ -659,18 +809,13 @@ def main() -> int:
     parser.add_argument("--verbose-cds", action="store_true")
     args = parser.parse_args()
 
-    input_path = Path(args.input)
+    input_path = args.input
     if not input_path.exists():
         raise SystemExit(f"Input table not found: {input_path}")
 
-    rows = pd.read_csv(input_path, encoding="utf-8-sig")
+    rows = load_city_manifest(input_path, args.sheet)
     if args.limit and args.limit > 0:
         rows = rows.head(args.limit).copy()
-
-    lat_col = "EPW latitude" if "EPW latitude" in rows.columns else "City latitude"
-    lon_col = "EPW longitude" if "EPW longitude" in rows.columns else "City longitude"
-    city_col = "City / metro"
-    country_col = "Country/Area"
 
     out_dir = Path(args.out_dir)
     cache_dir = Path(args.cache_dir)
@@ -682,17 +827,18 @@ def main() -> int:
 
     status_rows = []
     for idx, row in rows.iterrows():
-        country = str(row.get(country_col, ""))
-        city = str(row.get(city_col, f"city_{idx:03d}"))
-        lat = float(row[lat_col])
-        lon = float(row[lon_col])
+        country = str(row["country"])
+        city = str(row["datacentermap_market"])
+        lat = float(row["city_epw_lat"])
+        lon = float(row["city_epw_lon"])
         elevation_m = float(row.get("Elevation_m", 0.0) if pd.notna(row.get("Elevation_m", 0.0)) else 0.0)
         tz_hours = standard_timezone_offset_hours(lat, lon, args.year)
 
-        if "EPW filename" in rows.columns and pd.notna(row["EPW filename"]):
-            epw_name = str(row["EPW filename"])
-        else:
-            epw_name = f"{idx:03d}_{safe_filename(country)}_{safe_filename(city)}_{args.year}_AMY_ERA5.epw"
+        prefix = str(row.get("epw_filename_prefix") or f"{idx + 1:03d}_").strip()
+        prefix = re.sub(r"[^\w\u4e00-\u9fff.-]+", "_", prefix, flags=re.UNICODE).strip(".-")
+        if prefix and not prefix.endswith("_"):
+            prefix = f"{prefix}_"
+        epw_name = f"{prefix}{safe_filename(country)}_{safe_filename(city)}_{args.year}_AMY_ERA5.epw"
 
         epw_path = out_dir / epw_name
         nc_path = cache_dir / (Path(epw_name).stem + ".nc")

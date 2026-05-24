@@ -20,7 +20,8 @@ Important API behavior handled by this version:
 Recommended usage:
     export ELECTRICITYMAPS_TOKEN="your_token"
     python download_electricitymaps_10y_hourly_v2.py \
-        --manifest city_electricitymaps_request_manifest.csv \
+        --manifest ../coastal_datacenter_city_manifest.xlsx \
+        --sheet City_manifest \
         --output-dir electricitymaps_10y_output_v2 \
         --output-wide city_grid_carbon_intensity_electricitymaps_10y.csv \
         --end now \
@@ -46,12 +47,19 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import xml.etree.ElementTree as ET
+import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 API_BASE = "https://api.electricitymaps.com"
-DEFAULT_API_VERSION = "v3"
+XLSX_NS = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
+XLSX_REL_ID = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id"
+MANIFEST_SHEET_NAME = "City_manifest"
+ROOT_DIR = Path(__file__).resolve().parent.parent
+OUTPUT_DIR = ROOT_DIR / 'ci_download_toolkit'
+CITY_MANIFEST_FILE = ROOT_DIR / "coastal_datacenter_city_manifest.xlsx"
 
 
 class APIRequestError(RuntimeError):
@@ -99,49 +107,149 @@ def safe_name(s: str, max_len: int = 120) -> str:
     return s[:max_len] or "unknown"
 
 
-def read_manifest(path: Path) -> List[Dict[str, str]]:
-    with path.open("r", encoding="utf-8-sig", newline="") as f:
-        reader = csv.DictReader(f)
-        rows = [{clean_header(k): (v.strip() if isinstance(v, str) else v) for k, v in row.items()} for row in reader]
+def xlsx_col_index(cell_ref: str) -> int:
+    match = re.match(r"([A-Z]+)", cell_ref)
+    if not match:
+        return 0
+    n = 0
+    for ch in match.group(1):
+        n = n * 26 + ord(ch) - 64
+    return n - 1
+
+
+def read_xlsx_sheet_rows(path: Path, sheet_name: str) -> List[Dict[str, Any]]:
+    """Read a plain worksheet from xlsx using only the standard library."""
+    with zipfile.ZipFile(path) as z:
+        shared: List[str] = []
+        if "xl/sharedStrings.xml" in z.namelist():
+            root = ET.fromstring(z.read("xl/sharedStrings.xml"))
+            for si in root.findall(XLSX_NS + "si"):
+                shared.append("".join(t.text or "" for t in si.iter(XLSX_NS + "t")))
+
+        workbook = ET.fromstring(z.read("xl/workbook.xml"))
+        sheets = workbook.find(XLSX_NS + "sheets")
+        rid = None
+        for sheet in [] if sheets is None else sheets:
+            if sheet.attrib.get("name") == sheet_name:
+                rid = sheet.attrib[XLSX_REL_ID]
+                break
+        if rid is None:
+            raise ValueError(f"Sheet not found: {sheet_name}")
+
+        rels = ET.fromstring(z.read("xl/_rels/workbook.xml.rels"))
+        target = None
+        for rel in rels:
+            if rel.attrib.get("Id") == rid:
+                target = rel.attrib["Target"].lstrip("/")
+                break
+        if target is None:
+            raise ValueError(f"Worksheet relationship not found for sheet: {sheet_name}")
+        if not target.startswith("xl/"):
+            target = "xl/" + target
+
+        sheet = ET.fromstring(z.read(target))
+        rows: List[List[Any]] = []
+        for row in sheet.findall(XLSX_NS + "sheetData/" + XLSX_NS + "row"):
+            cells: Dict[int, Any] = {}
+            max_col = -1
+            for cell in row.findall(XLSX_NS + "c"):
+                col_idx = xlsx_col_index(cell.attrib.get("r", "A1"))
+                cell_type = cell.attrib.get("t")
+                value_node = cell.find(XLSX_NS + "v")
+                value: Any = None
+                if cell_type == "inlineStr":
+                    value = "".join(t.text or "" for t in cell.iter(XLSX_NS + "t"))
+                elif value_node is not None:
+                    raw = value_node.text
+                    if cell_type == "s":
+                        value = shared[int(raw)]
+                    elif cell_type == "b":
+                        value = bool(int(raw))
+                    else:
+                        try:
+                            value = float(raw)
+                            if value.is_integer():
+                                value = int(value)
+                        except Exception:
+                            value = raw
+                cells[col_idx] = value
+                max_col = max(max_col, col_idx)
+            rows.append([cells.get(i) for i in range(max_col + 1)])
+
+    if not rows:
+        return []
+    header = [clean_header(v) for v in rows[0]]
+    out: List[Dict[str, Any]] = []
+    for row in rows[1:]:
+        out.append({
+            header[i]: row[i] if i < len(row) else None
+            for i in range(len(header))
+            if header[i] not in {"", "None"}
+        })
+    return out
+
+
+def is_toolkit_ready(row: Dict[str, Any]) -> bool:
+    return str(row.get("toolkit_ready", "")).strip().lower() in {"1", "true", "yes", "y"}
+
+
+def required_text(row: Dict[str, Any], column: str, source_row: int) -> str:
+    value = row.get(column)
+    text = "" if value is None else str(value).strip()
+    if not text:
+        raise ValueError(f"Missing required column value '{column}' at workbook row {source_row}")
+    return text
+
+
+def required_coord(row: Dict[str, Any], column: str, source_row: int, min_value: float, max_value: float) -> float:
+    text = required_text(row, column, source_row)
+    try:
+        value = float(text)
+    except ValueError as exc:
+        raise ValueError(f"Invalid coordinate '{column}' at workbook row {source_row}: {text}") from exc
+    if not min_value <= value <= max_value:
+        raise ValueError(f"Coordinate '{column}' out of range at workbook row {source_row}: {value}")
+    return value
+
+
+def read_manifest(path: Path, sheet_name: str) -> List[Dict[str, str]]:
+    rows = read_xlsx_sheet_rows(path, sheet_name)
     if not rows:
         raise ValueError(f"Manifest is empty: {path}")
 
-    aliases = {
-        "city_name": ["city_name", "city", "City", "城市名称"],
-        "output_column": ["output_column", "column_name", "city_name", "City", "城市名称"],
-        "lat": ["city_latitude", "latitude", "lat", "Latitude", "纬度"],
-        "lon": ["city_longitude", "longitude", "lon", "Longitude", "经度"],
-        "zone": ["electricitymaps_zone", "zone", "zone_key", "zoneKey"],
-        "zone_hint": ["zone_hint", "country_zone", "country_code"],
-    }
-
-    def pick(row: Dict[str, str], names: List[str]) -> str:
-        for n in names:
-            if n in row and row[n] not in {None, ""}:
-                return str(row[n]).strip()
-        return ""
+    required_columns = [
+        "repo_city_index",
+        "datacentermap_market",
+        "toolkit_ready",
+        "city_epw_lat",
+        "city_epw_lon",
+        "electricitymaps_query_mode",
+        "electricitymaps_zone",
+    ]
+    missing = [c for c in required_columns if c not in rows[0]]
+    if missing:
+        raise ValueError(f"Workbook sheet {sheet_name} is missing required columns: {', '.join(missing)}")
 
     normalized: List[Dict[str, str]] = []
-    for i, row in enumerate(rows, start=1):
-        city_name = pick(row, aliases["city_name"])
-        lat = pick(row, aliases["lat"])
-        lon = pick(row, aliases["lon"])
-        out_col = pick(row, aliases["output_column"]) or city_name
-        zone = pick(row, aliases["zone"])
-        zone_hint = pick(row, aliases["zone_hint"])
-        if not city_name:
-            city_name = f"city_{i}"
-        if not lat or not lon:
-            raise ValueError(f"Missing latitude/longitude at row {i}: {row}")
+    for source_row, row in enumerate(rows, start=2):
+        if not is_toolkit_ready(row):
+            continue
+        city_name = required_text(row, "datacentermap_market", source_row)
+        lat = required_coord(row, "city_epw_lat", source_row, -90.0, 90.0)
+        lon = required_coord(row, "city_epw_lon", source_row, -180.0, 180.0)
+        query_mode = required_text(row, "electricitymaps_query_mode", source_row).lower()
+        zone = "" if query_mode == "lat_lon" else str(row.get("electricitymaps_zone") or "").strip()
         normalized.append({
-            "city_index": str(i),
+            "city_index": required_text(row, "repo_city_index", source_row),
             "city_name": city_name,
-            "output_column": out_col,
-            "lat": lat,
-            "lon": lon,
+            "output_column": city_name,
+            "lat": str(lat),
+            "lon": str(lon),
             "zone": zone,
-            "zone_hint": zone_hint,
+            "zone_hint": "",
         })
+    if not normalized:
+        raise ValueError(f"No toolkit-ready rows found in workbook sheet {sheet_name}: {path}")
     return normalized
 
 
@@ -543,12 +651,12 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Loop over Electricity Maps /carbon-intensity/past-range to download hourly carbon intensity for the past 10 years."
     )
-    parser.add_argument("--manifest", required=True, help="City manifest CSV. Required columns: city_name/output_column, latitude, longitude; optional electricitymaps_zone.")
-    parser.add_argument("--output-dir", default="ci_download_toolkit", help="Output directory.")
+    parser.add_argument("--manifest", type=Path, default=CITY_MANIFEST_FILE, help="City manifest XLSX.")
+    parser.add_argument("--sheet", default=MANIFEST_SHEET_NAME, help="Workbook sheet containing city targets.")
+    parser.add_argument("--output-dir", default=OUTPUT_DIR, help="Output directory.")
     parser.add_argument("--output-wide", default="city_grid_carbon_intensity_electricitymaps_10y.csv", help="Wide city CSV filename inside output-dir.")
     parser.add_argument("--token", default=None, help="Electricity Maps API token. Prefer env var ELECTRICITYMAPS_TOKEN.")
     parser.add_argument("--api-base", default=API_BASE)
-    parser.add_argument("--api-version", default=DEFAULT_API_VERSION)
     parser.add_argument("--start", default=None, help="UTC start, inclusive. If omitted, computed as --end minus --years-back years approximately.")
     parser.add_argument("--end", default="now", help="UTC end, exclusive. Use 'now' or ISO datetime. Default: now.")
     parser.add_argument("--years-back", type=float, default=10.0, help="When --start is omitted, use this many years before --end. Default: 10.")
@@ -587,7 +695,7 @@ def main() -> None:
     if not start < end:
         raise SystemExit(f"Invalid range: start {iso_z(start)} must be before end {iso_z(end)}")
 
-    rows = read_manifest(Path(args.manifest))
+    rows = read_manifest(args.manifest, args.sheet)
     fallback_map = read_zone_fallback_map(args.zone_fallback_map)
 
     out_dir = Path(args.output_dir)

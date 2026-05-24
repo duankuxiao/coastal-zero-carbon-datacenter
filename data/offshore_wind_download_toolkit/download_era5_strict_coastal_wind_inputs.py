@@ -1,11 +1,12 @@
 """
 Download ERA5 hourly meteorological inputs for offshore wind power modelling
-for rows whose Coastal class == "Strict coastal".
+from the City_manifest sheet in data/coastal_datacenter_city_manifest.xlsx.
 
 Windows example:
     pip install cdsapi pandas xarray netcdf4
     python download_era5_strict_coastal_wind_inputs.py ^
-        --input target_city_map.csv ^
+        --input ../coastal_datacenter_city_manifest.xlsx ^
+        --sheet City_manifest ^
         --output-dir era5_strict_coastal_wind ^
         --start 2024-01-01 --end 2024-12-31 ^
         --mode timeseries --variable-set recommended
@@ -35,8 +36,10 @@ import json
 import math
 import re
 import sys
+import xml.etree.ElementTree as ET
+import zipfile
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 try:
     import cdsapi
@@ -68,6 +71,115 @@ WAVE_VARIABLES = [
     "mean_wave_direction",
 ]
 
+XLSX_NS = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
+XLSX_REL_ID = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id"
+MANIFEST_SHEET_NAME = "City_manifest"
+
+
+def clean_header(value: object) -> str:
+    return str(value).replace("\ufeff", "").strip()
+
+
+def xlsx_col_index(cell_ref: str) -> int:
+    match = re.match(r"([A-Z]+)", cell_ref)
+    if not match:
+        return 0
+    n = 0
+    for ch in match.group(1):
+        n = n * 26 + ord(ch) - 64
+    return n - 1
+
+
+def read_xlsx_sheet_rows(path: Path, sheet_name: str) -> List[Dict[str, Any]]:
+    """Read a plain worksheet from xlsx using only the standard library."""
+    with zipfile.ZipFile(path) as z:
+        shared: List[str] = []
+        if "xl/sharedStrings.xml" in z.namelist():
+            root = ET.fromstring(z.read("xl/sharedStrings.xml"))
+            for si in root.findall(XLSX_NS + "si"):
+                shared.append("".join(t.text or "" for t in si.iter(XLSX_NS + "t")))
+
+        workbook = ET.fromstring(z.read("xl/workbook.xml"))
+        sheets = workbook.find(XLSX_NS + "sheets")
+        rid = None
+        for sheet in [] if sheets is None else sheets:
+            if sheet.attrib.get("name") == sheet_name:
+                rid = sheet.attrib[XLSX_REL_ID]
+                break
+        if rid is None:
+            raise ValueError(f"Sheet not found: {sheet_name}")
+
+        rels = ET.fromstring(z.read("xl/_rels/workbook.xml.rels"))
+        target = None
+        for rel in rels:
+            if rel.attrib.get("Id") == rid:
+                target = rel.attrib["Target"].lstrip("/")
+                break
+        if target is None:
+            raise ValueError(f"Worksheet relationship not found for sheet: {sheet_name}")
+        if not target.startswith("xl/"):
+            target = "xl/" + target
+
+        sheet = ET.fromstring(z.read(target))
+        rows: List[List[Any]] = []
+        for row in sheet.findall(XLSX_NS + "sheetData/" + XLSX_NS + "row"):
+            cells: Dict[int, Any] = {}
+            max_col = -1
+            for cell in row.findall(XLSX_NS + "c"):
+                col_idx = xlsx_col_index(cell.attrib.get("r", "A1"))
+                cell_type = cell.attrib.get("t")
+                value_node = cell.find(XLSX_NS + "v")
+                value: Any = None
+                if cell_type == "inlineStr":
+                    value = "".join(t.text or "" for t in cell.iter(XLSX_NS + "t"))
+                elif value_node is not None:
+                    raw = value_node.text
+                    if cell_type == "s":
+                        value = shared[int(raw)]
+                    elif cell_type == "b":
+                        value = bool(int(raw))
+                    else:
+                        try:
+                            value = float(raw)
+                            if value.is_integer():
+                                value = int(value)
+                        except Exception:
+                            value = raw
+                cells[col_idx] = value
+                max_col = max(max_col, col_idx)
+            rows.append([cells.get(i) for i in range(max_col + 1)])
+
+    if not rows:
+        return []
+    header = [clean_header(v) for v in rows[0]]
+    out: List[Dict[str, Any]] = []
+    for row in rows[1:]:
+        out.append({
+            header[i]: row[i] if i < len(row) else None
+            for i in range(len(header))
+            if header[i] not in {"", "None"}
+        })
+    return out
+
+
+def is_toolkit_ready(row: Dict[str, Any]) -> bool:
+    return str(row.get("toolkit_ready", "")).strip().lower() in {"1", "true", "yes", "y"}
+
+
+def required_text(row: Dict[str, Any], column: str, source_row: int) -> str:
+    value = row.get(column)
+    text = "" if value is None else str(value).strip()
+    if not text:
+        raise ValueError(f"Missing required column value '{column}' at workbook row {source_row}")
+    return text
+
+
+def make_point_id(value: object, fallback: int) -> str:
+    try:
+        return f"OW_{int(float(str(value).strip())):03d}"
+    except Exception:
+        return f"OW_{fallback:03d}"
+
 
 def parse_float(x: object) -> Optional[float]:
     if x is None:
@@ -88,16 +200,12 @@ def valid_coord(lat: Optional[float], lon: Optional[float]) -> bool:
     return lat is not None and lon is not None and -90 <= lat <= 90 and -180 <= lon <= 180
 
 
-def choose_sea_point(row: Dict[str, str]) -> Tuple[float, float, str]:
-    rep_lat = parse_float(row.get("Representative sea-point latitude"))
-    rep_lon = parse_float(row.get("Representative sea-point longitude"))
-    if valid_coord(rep_lat, rep_lon):
-        return float(rep_lat), float(rep_lon), "representative"
-    bak_lat = parse_float(row.get("Backup sea-point latitude"))
-    bak_lon = parse_float(row.get("Backup sea-point longitude"))
-    if valid_coord(bak_lat, bak_lon):
-        return float(bak_lat), float(bak_lon), "backup"
-    raise ValueError("No valid representative or backup sea-point coordinate")
+def choose_offshore_wind_point(row: Dict[str, Any]) -> Tuple[float, float, str]:
+    lat = parse_float(row.get("offshore_wind_lat"))
+    lon = parse_float(row.get("offshore_wind_lon"))
+    if valid_coord(lat, lon):
+        return float(lat), float(lon), "offshore_wind"
+    raise ValueError("No valid offshore_wind_lat/offshore_wind_lon coordinate")
 
 
 def safe_name(text: str, max_len: int = 80) -> str:
@@ -106,29 +214,42 @@ def safe_name(text: str, max_len: int = 80) -> str:
     return text[:max_len] or "unnamed"
 
 
-def iter_strict_coastal_points(csv_path: Path) -> List[Dict[str, object]]:
+def iter_offshore_wind_points(workbook_path: Path, sheet_name: str) -> List[Dict[str, object]]:
+    rows = read_xlsx_sheet_rows(workbook_path, sheet_name)
+    if not rows:
+        raise ValueError(f"Manifest is empty: {workbook_path}")
+    required_columns = [
+        "repo_city_index",
+        "country",
+        "datacentermap_market",
+        "toolkit_ready",
+        "offshore_wind_lat",
+        "offshore_wind_lon",
+    ]
+    missing = [c for c in required_columns if c not in rows[0]]
+    if missing:
+        raise ValueError(f"Workbook sheet {sheet_name} is missing required columns: {', '.join(missing)}")
+
     points: List[Dict[str, object]] = []
-    with csv_path.open("r", encoding="utf-8-sig", newline="") as f:
-        reader = csv.DictReader(f)
-        for line_no, row in enumerate(reader, start=2):
-            if row.get("Coastal class", "").strip() != "Strict coastal":
-                continue
-            try:
-                lat, lon, coord_source = choose_sea_point(row)
-            except ValueError as exc:
-                print(f"[SKIP] row={line_no}: {exc}", file=sys.stderr)
-                continue
-            points.append(
-                {
-                    "point_id": f"OW_{len(points)+1:03d}",
-                    "source_row": line_no,
-                    "country_area": row.get("Country/Area", "").strip(),
-                    "region": row.get("Region", "").strip(),
-                    "city_metro": row.get("City / metro", "").strip(),
-                    "lat": lat,
-                    "lon": lon,
-                    "coordinate_source": coord_source,
-                }
+    for line_no, row in enumerate(rows, start=2):
+        if not is_toolkit_ready(row):
+            continue
+        try:
+            lat, lon, coord_source = choose_offshore_wind_point(row)
+        except ValueError as exc:
+            print(f"[SKIP] row={line_no}: {exc}", file=sys.stderr)
+            continue
+        points.append(
+            {
+                "point_id": make_point_id(row.get("repo_city_index"), len(points) + 1),
+                "source_row": line_no,
+                "country_area": required_text(row, "country", line_no),
+                "region": "",
+                "city_metro": required_text(row, "datacentermap_market", line_no),
+                "lat": lat,
+                "lon": lon,
+                "coordinate_source": coord_source,
+            }
             )
     return points
 
@@ -237,12 +358,13 @@ def variable_list(name: str, include_wave: bool) -> Tuple[List[str], List[str]]:
     return atm, wave
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
-CITY_MAP_FILE = ROOT_DIR / "target_city_map.csv"
+CITY_MANIFEST_FILE = ROOT_DIR / "coastal_datacenter_city_manifest.xlsx"
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--input",type=Path, default=CITY_MAP_FILE, help="Input city map CSV")
-    parser.add_argument("--output-dir", default=Path(__file__).resolve().parent, help="Directory for downloaded files")
+    parser.add_argument("--input", type=Path, default=CITY_MANIFEST_FILE, help="Input city manifest XLSX")
+    parser.add_argument("--sheet", default=MANIFEST_SHEET_NAME, help="Workbook sheet containing city targets")
+    parser.add_argument("--output-dir", type=Path, default=Path(__file__).resolve().parent, help="Directory for downloaded files")
     parser.add_argument("--start", default="2025-01-01", help="Start date, e.g. 2025-01-01")
     parser.add_argument("--end", default="2025-12-31", help="End date, e.g. 2025-12-31")
     parser.add_argument("--mode", choices=["timeseries", "area"], default="timeseries")
@@ -259,7 +381,7 @@ def main() -> None:
     if end < start:
         raise SystemExit("--end must be >= --start")
 
-    points = iter_strict_coastal_points(args.input)
+    points = iter_offshore_wind_points(args.input, args.sheet)
     if args.max_points is not None:
         points = points[: args.max_points]
 

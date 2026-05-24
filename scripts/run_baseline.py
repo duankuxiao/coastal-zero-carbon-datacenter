@@ -1,7 +1,7 @@
-"""Baseline comparison for strict-coastal data-center cities.
+"""Baseline comparison for toolkit-ready coastal data-center cities.
 
-The script evaluates every city marked as "Strict coastal" in
-data/target_city_map.csv with both air-source and seawater-source cooling.
+The script evaluates every city marked toolkit-ready in
+data/coastal_datacenter_city_manifest.xlsx with both air-source and seawater-source cooling.
 It writes three CSV files:
 
 1. air-source city results
@@ -11,7 +11,8 @@ It writes three CSV files:
 Annual offshore wind capacity is sized by annual energy balance only. The
 comparison uses the SST timestamp window for both cooling modes by default, so
 air-source and seawater-source carbon emissions use the same carbon-intensity
-period as the seawater temperatures.
+period as the seawater temperatures. Offshore wind inputs are resolved through
+data/offshore_wind_download_toolkit/strict_coastal_download_manifest.csv.
 """
 
 from __future__ import annotations
@@ -25,12 +26,12 @@ import pandas as pd
 
 from energy.calculate_datacenter_energy import (
     CARBON_INTENSITY_FILE,
-    CITY_MAP_FILE,
     DEFAULT_OUTPUT_DIR,
     SST_FILE,
     WORKLOAD_FILE,
     DataCenterEnergyResult,
     calculate_data_center_energy,
+    load_city_manifest,
 )
 from renewables.calculate_wind_capacity import WindResourceResult, calculate_wind_resource
 
@@ -70,11 +71,8 @@ def run_baseline(
     output_path.mkdir(parents=True, exist_ok=True)
 
     baseline_alignment = _resolve_baseline_alignment(start_time, time_alignment)
-    city_map = pd.read_csv(CITY_MAP_FILE)
-    strict_coastal = city_map[
-        city_map["Coastal class"].astype(str).str.strip().str.lower() == "strict coastal"
-        ]
-    cities = strict_coastal["City / metro"].dropna().astype(str).tolist()
+    city_map = load_city_manifest()
+    cities = city_map["datacentermap_market"].dropna().astype(str).tolist()
 
     carbon_df = pd.read_csv(CARBON_INTENSITY_FILE)
     sst_df = pd.read_csv(SST_FILE)
@@ -332,7 +330,7 @@ def main() -> None:
         default=str(WORKLOAD_FILE),
         help="CSV workload file containing a cpu_load column.",
     )
-    parser.add_argument("--rated-it-power-kw", type=float, default=5000.0)
+    parser.add_argument("--rated-it-power-kw", type=float, default=1000.0)
     parser.add_argument("--idle-power-fraction", type=float, default=0.3)
     parser.add_argument("--hours", type=int, default=8760)
     parser.add_argument(

@@ -1,7 +1,7 @@
-"""Batch runner for strict-coastal zero-carbon dispatch optimization.
+"""Batch runner for toolkit-ready coastal zero-carbon dispatch optimization.
 
 This script runs the single-city optimizer from ``optimization.optimize_zero_carbon``
-for every city marked ``Strict coastal`` in ``data/target_city_map.csv``.
+for every toolkit-ready city in ``data/coastal_datacenter_city_manifest.xlsx``.
 
 It intentionally does not save 8760-hour per-city dispatch tables. Outputs are:
 
@@ -22,7 +22,7 @@ from typing import Iterable
 
 import pandas as pd
 
-from energy.calculate_datacenter_energy import CITY_MAP_FILE, WORKLOAD_FILE
+from energy.calculate_datacenter_energy import WORKLOAD_FILE, load_city_manifest
 from optimization.optimize_zero_carbon import optimization
 from renewables.calculate_wind_capacity import calculate_required_wind_capacity
 
@@ -95,18 +95,15 @@ def run_strict_coastal_optimizations(
     wind_cut_out: float = 25.0,
     output_dir: str | Path = DEFAULT_OUTPUT_DIR,
 ) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, Path]]:
-    """Run optimization for all strict-coastal cities and save aggregate CSVs."""
+    """Run optimization for all toolkit-ready cities and save aggregate CSVs."""
     output_path = _resolve_output_dir(output_dir)
     objective_list = tuple(objectives)
-    city_map = pd.read_csv(CITY_MAP_FILE)
-    strict_coastal = city_map[
-        city_map["Coastal class"].astype(str).str.strip().str.lower() == "strict coastal"
-    ].copy()
+    city_rows = load_city_manifest()
 
     rows: list[dict[str, object]] = []
-    cities = strict_coastal["City / metro"].dropna().astype(str).tolist()
-    for city_index, (_, city_row) in enumerate(strict_coastal.iterrows(), start=1):
-        city = str(city_row["City / metro"])
+    cities = city_rows["datacentermap_market"].dropna().astype(str).tolist()
+    for city_index, (_, city_row) in enumerate(city_rows.iterrows(), start=1):
+        city = str(city_row["datacentermap_market"])
         print(f"Processing {city_index}/{len(cities)}: {city}")
 
         try:
@@ -340,11 +337,11 @@ def _scenario_metadata(scenario_config: dict[str, object] | None) -> dict[str, o
 
 def _base_city_row(city_row: pd.Series) -> dict[str, object]:
     return {
-        "country_area": city_row.get("Country/Area", ""),
-        "region": city_row.get("Region", ""),
-        "city": city_row.get("City / metro", ""),
-        "city_metro_type": city_row.get("City/metro type", ""),
-        "coastal_class": city_row.get("Coastal class", ""),
+        "country_area": city_row.get("country", ""),
+        "region": "",
+        "city": city_row.get("datacentermap_market", ""),
+        "city_metro_type": "datacentermap_market",
+        "coastal_class": city_row.get("selection_status", ""),
     }
 
 
