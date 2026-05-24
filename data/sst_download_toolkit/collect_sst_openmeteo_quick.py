@@ -207,8 +207,8 @@ def load_targets(input_xlsx: str, sheet_name: str) -> List[Dict[str, Any]]:
             "coastal_class": r.get("selection_status"),
             "sea_latitude": required_coord(r, "sea_sst_lat", source_row, -90.0, 90.0),
             "sea_longitude": required_coord(r, "sea_sst_lon", source_row, -180.0, 180.0),
-            "backup_sea_latitude": None,
-            "backup_sea_longitude": None,
+            "backup_sea_latitude": r.get("backup_sea_latitude") or r.get("backup_sst_lat") or r.get("backup_sea_sst_lat"),
+            "backup_sea_longitude": r.get("backup_sea_longitude") or r.get("backup_sst_lon") or r.get("backup_sea_sst_lon"),
         })
     if not targets:
         raise ValueError(f"No toolkit-ready rows found in workbook sheet {sheet_name}: {input_xlsx}")

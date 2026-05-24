@@ -1,97 +1,97 @@
 ﻿point_id,source_row,country_area,region,city_metro,lat,lon,coordinate_source
 OW_001,2,USA,,Los Angeles,33.25,-118.75,offshore_wind
-OW_002,3,USA,,New York,40.0,-73.5,offshore_wind
-OW_003,4,USA,,Seattle,48.0,-123.0,offshore_wind
+OW_002,3,USA,,New York,40,-73.5,offshore_wind
+OW_003,4,USA,,Seattle,48,-123,offshore_wind
 OW_004,5,USA,,Boston,42.25,-70.5,offshore_wind
-OW_005,6,USA,,Tampa,27.5,-83.0,offshore_wind
-OW_006,7,China,,Shanghai,31.0,122.5,offshore_wind
-OW_007,8,China,,Guangzhou,22.25,114.0,offshore_wind
-OW_008,9,China,,Shenzhen,22.0,114.5,offshore_wind
+OW_005,6,USA,,Tampa,27.5,-83,offshore_wind
+OW_006,7,China,,Shanghai,31,122.5,offshore_wind
+OW_007,8,China,,Guangzhou,22.25,114,offshore_wind
+OW_008,9,China,,Shenzhen,22,114.5,offshore_wind
 OW_009,10,China,,Tianjin,38.75,118.5,offshore_wind
-OW_010,11,China,,Nantong,31.75,122.0,offshore_wind
+OW_010,11,China,,Nantong,31.75,122,offshore_wind
 OW_011,12,United Kingdom,,Cardiff,51.25,-3.75,offshore_wind
 OW_012,13,United Kingdom,,Edinburgh,56.25,-2.75,offshore_wind
 OW_013,14,United Kingdom,,Portsmouth,50.5,-1.25,offshore_wind
 OW_014,15,United Kingdom,,Liverpool,53.75,-3.5,offshore_wind
-OW_015,16,United Kingdom,,Belfast,55.0,-5.5,offshore_wind
-OW_016,17,Australia,,Sydney,-34.0,152.0,offshore_wind
+OW_015,16,United Kingdom,,Belfast,55,-5.5,offshore_wind
+OW_016,17,Australia,,Sydney,-34,152,offshore_wind
 OW_017,18,Australia,,Melbourne,-38.25,144.75,offshore_wind
 OW_018,19,Australia,,Perth,-32.25,115.25,offshore_wind
-OW_019,20,Australia,,Brisbane,-27.0,153.75,offshore_wind
-OW_020,21,Australia,,Adelaide,-35.25,138.0,offshore_wind
+OW_019,20,Australia,,Brisbane,-27,153.75,offshore_wind
+OW_020,21,Australia,,Adelaide,-35.25,138,offshore_wind
 OW_021,22,Japan,,Tokyo,35.25,140.5,offshore_wind
-OW_022,23,Japan,,Osaka,34.25,135.0,offshore_wind
-OW_023,24,Japan,,Yokohama,35.0,140.0,offshore_wind
-OW_024,25,Japan,,Nagoya,34.5,137.0,offshore_wind
-OW_025,26,Japan,,Fukuoka,34.0,130.0,offshore_wind
+OW_022,23,Japan,,Osaka,34.25,135,offshore_wind
+OW_023,24,Japan,,Yokohama,35,140,offshore_wind
+OW_024,25,Japan,,Nagoya,34.5,137,offshore_wind
+OW_025,26,Japan,,Fukuoka,34,130,offshore_wind
 OW_026,27,Ireland,,Dublin,53.25,-5.5,offshore_wind
-OW_027,28,Ireland,,Waterford,52.0,-6.5,offshore_wind
+OW_027,28,Ireland,,Waterford,52,-6.5,offshore_wind
 OW_028,29,Ireland,,Galway,53.25,-9.75,offshore_wind
-OW_029,30,Ireland,,Drogheda,54.0,-5.5,offshore_wind
+OW_029,30,Ireland,,Drogheda,54,-5.5,offshore_wind
 OW_030,31,Ireland,,Cork,51.5,-8.25,offshore_wind
 OW_031,32,Norway,,Oslo,59.5,10.25,offshore_wind
 OW_032,33,Norway,,Stavanger,58.5,5.25,offshore_wind
-OW_033,34,Norway,,Bergen,60.0,4.5,offshore_wind
+OW_033,34,Norway,,Bergen,60,4.5,offshore_wind
 OW_034,35,Norway,,Kristiansand,57.75,7.75,offshore_wind
 OW_035,36,Norway,,Trondheim,63.25,9.75,offshore_wind
 OW_036,37,India,,Mumbai,18.5,72.25,offshore_wind
-OW_037,38,India,,Chennai,13.0,81.0,offshore_wind
+OW_037,38,India,,Chennai,13,81,offshore_wind
 OW_038,39,India,,Navi Mumbai,18.5,72.5,offshore_wind
 OW_039,40,India,,Cochin,9.5,75.75,offshore_wind
-OW_040,41,India,,Visakhapatnam,17.25,84.0,offshore_wind
-OW_041,42,Malaysia,,Johor Bahru,1.0,104.25,offshore_wind
-OW_042,43,Malaysia,,Bayan Baru,5.0,99.75,offshore_wind
-OW_043,44,Malaysia,,Kuching,2.0,110.75,offshore_wind
+OW_040,41,India,,Visakhapatnam,17.25,84,offshore_wind
+OW_041,42,Malaysia,,Johor Bahru,1,104.25,offshore_wind
+OW_042,43,Malaysia,,Bayan Baru,5,99.75,offshore_wind
+OW_043,44,Malaysia,,Kuching,2,110.75,offshore_wind
 OW_044,45,Malaysia,,George Town,5.75,99.75,offshore_wind
 OW_045,46,Malaysia,,Bintulu,3.25,113.75,offshore_wind
 OW_046,47,Finland,,Helsinki,59.75,24.5,offshore_wind
 OW_047,48,Finland,,Pori,61.25,21.25,offshore_wind
 OW_048,49,Finland,,Oulu,64.75,24.75,offshore_wind
-OW_049,50,Finland,,Kemi,65.5,24.0,offshore_wind
+OW_049,50,Finland,,Kemi,65.5,24,offshore_wind
 OW_050,51,Finland,,Jakobstad,63.5,22.25,offshore_wind
 OW_051,52,Portugal,,Lisbon,38.25,-9.75,offshore_wind
 OW_052,53,Portugal,,Porto,41.25,-9.25,offshore_wind
 OW_053,54,Portugal,,Carnaxide,38.5,-9.75,offshore_wind
 OW_054,55,Portugal,,Barreiro,38.25,-9.5,offshore_wind
 OW_055,56,Portugal,,Matosinhos,41.25,-9.25,offshore_wind
-OW_056,57,South Korea,,Incheon,37.0,125.75,offshore_wind
+OW_056,57,South Korea,,Incheon,37,125.75,offshore_wind
 OW_057,58,South Korea,,Busan,34.75,129.5,offshore_wind
-OW_058,59,South Korea,,Ulsan,35.0,130.0,offshore_wind
-OW_059,60,South Korea,,Gunsan,36.0,125.75,offshore_wind
+OW_058,59,South Korea,,Ulsan,35,130,offshore_wind
+OW_059,60,South Korea,,Gunsan,36,125.75,offshore_wind
 OW_060,61,South Korea,,Gangneung,37.75,129.75,offshore_wind
-OW_061,62,The Netherlands,,Amsterdam,52.75,4.0,offshore_wind
-OW_062,63,The Netherlands,,Rotterdam,52.0,3.5,offshore_wind
-OW_063,64,The Netherlands,,The Hague,52.0,3.75,offshore_wind
+OW_061,62,The Netherlands,,Amsterdam,52.75,4,offshore_wind
+OW_062,63,The Netherlands,,Rotterdam,52,3.5,offshore_wind
+OW_063,64,The Netherlands,,The Hague,52,3.75,offshore_wind
 OW_064,65,The Netherlands,,Goes,51.5,3.25,offshore_wind
 OW_065,66,The Netherlands,,Dordrecht,51.75,3.75,offshore_wind
 OW_066,67,Canada,,Vancouver,49.25,-123.75,offshore_wind
-OW_067,68,Canada,,Halifax,44.25,-63.0,offshore_wind
+OW_067,68,Canada,,Halifax,44.25,-63,offshore_wind
 OW_068,69,Canada,,Saint John,44.75,-66.25,offshore_wind
 OW_069,70,Canada,,Charlottetown,46.25,-62.5,offshore_wind
-OW_070,71,Canada,,Victoria,48.25,-123.0,offshore_wind
-OW_071,72,Denmark,,Copenhagen,55.75,13.0,offshore_wind
+OW_070,71,Canada,,Victoria,48.25,-123,offshore_wind
+OW_071,72,Denmark,,Copenhagen,55.75,13,offshore_wind
 OW_072,73,Denmark,,Varde,55.5,7.75,offshore_wind
-OW_073,74,Denmark,,Esbjerg,55.25,8.0,offshore_wind
-OW_074,75,Denmark,,Århus,56.25,10.75,offshore_wind
-OW_075,76,Denmark,,Saeby,57.25,11.0,offshore_wind
-OW_076,77,Spain,,Barcelona,41.0,2.75,offshore_wind
+OW_073,74,Denmark,,Esbjerg,55.25,8,offshore_wind
+OW_074,75,Denmark,,Aarhus,56.25,10.75,offshore_wind
+OW_075,76,Denmark,,Saeby,57.25,11,offshore_wind
+OW_076,77,Spain,,Barcelona,41,2.75,offshore_wind
 OW_077,78,Spain,,Santander,43.75,-4.25,offshore_wind
-OW_078,79,Spain,,Valencia,39.0,0.0,offshore_wind
-OW_079,80,Spain,,Bilbao,43.75,-3.0,offshore_wind
+OW_078,79,Spain,,Valencia,39,0,offshore_wind
+OW_079,80,Spain,,Bilbao,43.75,-3,offshore_wind
 OW_080,81,Spain,,Malaga,36.25,-4.5,offshore_wind
 OW_081,82,Indonesia,,Jakarta,-5.5,106.75,offshore_wind
-OW_082,83,Indonesia,,Batam,1.0,104.5,offshore_wind
+OW_082,83,Indonesia,,Batam,1,104.5,offshore_wind
 OW_083,84,Indonesia,,Surabaya,-6.75,112.75,offshore_wind
-OW_084,85,Indonesia,,Denpasar,-8.75,116.0,offshore_wind
+OW_084,85,Indonesia,,Denpasar,-8.75,116,offshore_wind
 OW_085,86,Indonesia,,Makassar,-4.75,119.25,offshore_wind
-OW_086,87,Singapore,,Singapore,1.0,104.25,offshore_wind
+OW_086,87,Singapore,,Singapore,1,104.25,offshore_wind
 OW_091,92,Sweden,,Stockholm,59.25,18.75,offshore_wind
-OW_092,93,Sweden,,Gävle,60.75,18.0,offshore_wind
+OW_092,93,Sweden,,Gavle,60.75,18,offshore_wind
 OW_093,94,Sweden,,Gothenburg,57.5,11.5,offshore_wind
-OW_094,95,Sweden,,Malmö,55.25,12.5,offshore_wind
-OW_095,96,Sweden,,Pitea,65.0,21.0,offshore_wind
+OW_094,95,Sweden,,Malmo,55.25,12.5,offshore_wind
+OW_095,96,Sweden,,Pitea,65,21,offshore_wind
 OW_096,97,Thailand,,Bangkok,13.25,100.5,offshore_wind
 OW_097,98,Thailand,,Chonburi,12.75,100.75,offshore_wind
 OW_098,99,Thailand,,Rayong,12.25,101.25,offshore_wind
 OW_099,100,Thailand,,Pattaya,12.5,100.75,offshore_wind
-OW_100,101,Thailand,,Ban Chang,12.25,101.0,offshore_wind
+OW_100,101,Thailand,,Ban Chang,12.25,101,offshore_wind
