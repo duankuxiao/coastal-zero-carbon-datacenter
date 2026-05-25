@@ -39,7 +39,6 @@
 │   ├── battery_model.py                       # 储能模型
 │   ├── battery_env_fwd_view.py                # 储能强化学习环境
 │   └── load_shift.py                          # 可转移负荷环境
-├── core/                                      # 旧导入路径兼容层
 ├── data/
 │   ├── target_city_map.csv                    # 220 个城市/都市圈及沿海分类
 │   ├── Workload/                              # CPU 工作负载曲线
@@ -318,7 +317,6 @@ python data/offshore_wind_download_toolkit/download_era5_strict_coastal_wind_inp
 
 ## 注意事项
 
-- `core/` 目录仅作为旧导入路径兼容层，新代码应优先从 `energy/`、`renewables/`、`optimization/` 和 `scripts/` 导入。
 - 批量 baseline 中缺少有效碳强度、SST 或风电输入数据的城市会被跳过，并在命令行输出跳过原因。
 - 批量优化默认不保存每个城市的 8760 小时明细，避免输出文件过多；如需单城市小时级结果，请调用 `run_optimization(..., output_results=True, include_hourly=True)`。
 
