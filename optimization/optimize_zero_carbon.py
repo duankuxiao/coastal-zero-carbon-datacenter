@@ -500,11 +500,8 @@ def optimization(
     return payload
 
 
-run_optimization = optimization
-
-
 def main() -> None:
-    payload = run_optimization(
+    payload = optimization(
         city="Shanghai",
         cooling="seawater",
         wind_capacity_mw=75.21370150314945,
