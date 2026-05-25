@@ -9,7 +9,8 @@ It intentionally does not save 8760-hour per-city dispatch tables. Outputs are:
 2. one aggregate scenario comparison table.
 
 Edit the arguments in ``main()`` before running if you need a different cooling
-mode, objective list, battery setting, or output directory.
+mode, objective list, battery setting, or output directory. The baseline set
+also includes an air-source case with no load shifting or battery.
 """
 
 from __future__ import annotations
@@ -55,8 +56,9 @@ RESULT_METRICS = [
     "max_hourly_battery_charge_mw",
     "max_hourly_battery_discharge_mw",
 ]
-SCENARIO_ORDER = ("baseline", "load_shift", "load_shift_battery")
+SCENARIO_ORDER = ("baseline_air_source", "baseline", "load_shift", "load_shift_battery")
 SCENARIO_LABELS = {
+    "baseline_air_source": "baseline (air source)",
     "baseline": "baseline",
     "load_shift": "load shift",
     "load_shift_battery": "load shift + battery",
@@ -106,41 +108,64 @@ def run_strict_coastal_optimizations(
         city = str(city_row["datacentermap_market"])
         print(f"Processing {city_index}/{len(cities)}: {city}")
 
-        try:
-            wind_capacity = calculate_required_wind_capacity(
-                city=city,
-                cooling_type=cooling,
-                workload_file=workload_file,
-                rated_it_power_kw=rated_it_power_kw,
-                idle_power_fraction=idle_power_fraction,
-                hours=hours,
-                start_time=start_time,
-                time_alignment=time_alignment,
-                max_carbon_gap_hours=max_carbon_gap_hours,
-                hub_height_m=hub_height_m,
-                loss_fraction=wind_loss_fraction,
-                cut_in=wind_cut_in,
-                rated=wind_rated,
-                cut_out=wind_cut_out,
-                progress=False,
-            )
-        except Exception as exc:
-            rows.append(_failed_row(city_row, cooling, "wind-capacity", str(exc)))
-            print(f"  skipped: {exc}")
-            continue
-
-        for scenario_config in _scenario_configs(
+        scenario_configs = _scenario_configs(
+            cooling=cooling,
             load_shift_fraction=load_shift_fraction,
             battery_capacity_mwh=battery_capacity_mwh,
             battery_charge_limit_mw=battery_charge_limit_mw,
             battery_discharge_limit_mw=battery_discharge_limit_mw,
-        ):
+        )
+        wind_capacities: dict[str, object] = {}
+        wind_capacity_errors: dict[str, str] = {}
+        for scenario_config in scenario_configs:
+            scenario_cooling = str(scenario_config["cooling_type"])
+            if scenario_cooling in wind_capacities or scenario_cooling in wind_capacity_errors:
+                continue
+            try:
+                wind_capacities[scenario_cooling] = calculate_required_wind_capacity(
+                    city=city,
+                    cooling_type=scenario_cooling,
+                    workload_file=workload_file,
+                    rated_it_power_kw=rated_it_power_kw,
+                    idle_power_fraction=idle_power_fraction,
+                    hours=hours,
+                    start_time=start_time,
+                    time_alignment=time_alignment,
+                    max_carbon_gap_hours=max_carbon_gap_hours,
+                    hub_height_m=hub_height_m,
+                    loss_fraction=wind_loss_fraction,
+                    cut_in=wind_cut_in,
+                    rated=wind_rated,
+                    cut_out=wind_cut_out,
+                    progress=False,
+                )
+            except Exception as exc:
+                wind_capacity_errors[scenario_cooling] = str(exc)
+
+        for scenario_config in scenario_configs:
             scenario = str(scenario_config["scenario"])
+            scenario_cooling = str(scenario_config["cooling_type"])
+            if scenario_cooling in wind_capacity_errors:
+                error = wind_capacity_errors[scenario_cooling]
+                rows.append(
+                    _failed_row(
+                        city_row,
+                        scenario_cooling,
+                        "wind-capacity",
+                        error,
+                        None,
+                        scenario_config,
+                    )
+                )
+                print(f"  {scenario}/wind-capacity failed: {error}")
+                continue
+
+            wind_capacity = wind_capacities[scenario_cooling]
             for objective in objective_list:
                 try:
                     result = optimization(
                         city=city,
-                        cooling=cooling,
+                        cooling=scenario_cooling,
                         wind_capacity_mw=wind_capacity.required_wind_capacity_mw,
                         wind_nc_file=wind_capacity.wind_nc_file,
                         workload_file=workload_file,
@@ -271,6 +296,7 @@ def _failed_row(
 
 def _scenario_configs(
     *,
+    cooling: str,
     load_shift_fraction: float,
     battery_capacity_mwh: float,
     battery_charge_limit_mw: float | None,
@@ -278,7 +304,18 @@ def _scenario_configs(
 ) -> tuple[dict[str, object], ...]:
     return (
         {
+            "scenario": "baseline_air_source",
+            "cooling_type": "air_source",
+            "load_shift_enabled": False,
+            "battery_enabled": False,
+            "load_shift_fraction": 0.0,
+            "battery_capacity_mwh": 0.0,
+            "battery_charge_limit_mw": 0.0,
+            "battery_discharge_limit_mw": 0.0,
+        },
+        {
             "scenario": "baseline",
+            "cooling_type": cooling,
             "load_shift_enabled": False,
             "battery_enabled": False,
             "load_shift_fraction": 0.0,
@@ -288,6 +325,7 @@ def _scenario_configs(
         },
         {
             "scenario": "load_shift",
+            "cooling_type": cooling,
             "load_shift_enabled": True,
             "battery_enabled": False,
             "load_shift_fraction": load_shift_fraction,
@@ -297,6 +335,7 @@ def _scenario_configs(
         },
         {
             "scenario": "load_shift_battery",
+            "cooling_type": cooling,
             "load_shift_enabled": True,
             "battery_enabled": battery_capacity_mwh > 0.0,
             "load_shift_fraction": load_shift_fraction,
@@ -400,7 +439,7 @@ def _aggregate_scenario(
         "objective": objective,
         "scenario": scenario,
         "scenario_label": SCENARIO_LABELS.get(scenario, scenario),
-        "cooling_type": cooling,
+        "cooling_type": _aggregate_cooling_type(subset, scenario, cooling),
         "included_city_count": int(subset["city"].nunique()) if not subset.empty else 0,
         "hours_per_city": hours,
     }
@@ -416,6 +455,22 @@ def _aggregate_scenario(
     row["renewable_physical_coverage_fraction"] = row["wind_coverage_mwh"] / demand if demand else math.nan
     row["load_movement_budget_used_fraction"] = shifted_down / demand if demand else math.nan
     return row
+
+
+def _aggregate_cooling_type(results: pd.DataFrame, scenario: str, default_cooling: str) -> str:
+    if not results.empty and "cooling_type" in results:
+        cooling_types = sorted(
+            str(value)
+            for value in results["cooling_type"].dropna().unique()
+            if str(value).strip()
+        )
+        if len(cooling_types) == 1:
+            return cooling_types[0]
+        if cooling_types:
+            return "|".join(cooling_types)
+    if scenario == "baseline_air_source":
+        return "air_source"
+    return default_cooling
 
 
 def _aggregate_metric(results: pd.DataFrame, metric: str) -> float:

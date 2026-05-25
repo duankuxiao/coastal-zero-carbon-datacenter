@@ -471,7 +471,7 @@ def main() -> None:
         default=str(WORKLOAD_FILE),
         help="CSV workload file containing a cpu_load column.",
     )
-    parser.add_argument("--rated-it-power-kw", type=float, default=5000.0)
+    parser.add_argument("--rated-it-power-kw", type=float, default=10000.0)
     parser.add_argument("--idle-power-fraction", type=float, default=0.3)
     parser.add_argument("--hours", type=int, default=8760)
     parser.add_argument(
