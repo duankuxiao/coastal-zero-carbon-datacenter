@@ -11,7 +11,7 @@
 ## 功能概览
 
 - 单城市数据中心能耗、PUE 和碳排放计算。
-- 空气源冷却与海水源冷却的严格沿海城市批量对比。
+- 空气源冷却与海水源冷却的沿海城市批量对比。
 - 基于 timestamp 对齐 workload、EPW 气温、SST 和电网碳强度。
 - 气象输入统一为 2025 年 ERA5 AMY EPW，避免典型气象年和实际年份混用造成的对比偏差。
 - 基于 ERA5 海上风电数据估算年度电量平衡所需的风电装机容量。
@@ -24,8 +24,8 @@
 ```text
 .
 ├── scripts/
-│   ├── run_baseline.py                        # 严格沿海城市空气源/海水源批量基准测试
-│   ├── run_optimize.py                        # 严格沿海城市批量零碳调度优化
+│   ├── run_baseline.py                        # 沿海城市空气源/海水源批量基准测试
+│   ├── run_optimize.py                        # 沿海城市批量零碳调度优化
 │   └── __init__.py
 ├── energy/
 │   ├── calculate_datacenter_energy.py         # 单城市数据中心能耗/排放计算入口
@@ -66,7 +66,7 @@
 - `data/epw_download_toolkit/epw_2025_era5_only/*.epw`：2025 年 ERA5-only AMY EPW 气象文件。核心模型读取解压后的 EPW 目录，不直接读取 zip 包。
 - `data/sst_download_toolkit/sea_surface_temperature_2025_openmeteo.csv`：非 Inland 城市的小时级海表温度，单位为 degC。
 - `data/ci_download_toolkit/carbon_intensity_electricitymaps.csv`：小时级电网碳强度宽表，单位为 gCO2eq/kWh。
-- `data/offshore_wind_download_toolkit/offshore_wind/*.nc`：严格沿海城市代表海点的 ERA5 风电气象输入。
+- `data/offshore_wind_download_toolkit/offshore_wind/*.nc`：沿海城市代表海点的 ERA5 风电气象输入。
 - `data/offshore_wind_download_toolkit/strict_coastal_offshore_wind_points_manifest.csv`：城市与海上风电代表点、ERA5 网格点的对应关系。
 
 各类下载和再生成脚本位于对应的 `*_download_toolkit` 目录中。
@@ -141,7 +141,7 @@ python -m renewables.calculate_wind_capacity ^
   --json
 ```
 
-运行严格沿海城市空气源/海水源批量基准测试：
+运行沿海城市空气源/海水源批量基准测试：
 
 ```bash
 python -m scripts.run_baseline ^
@@ -154,10 +154,10 @@ python -m scripts.run_baseline ^
   --output-dir results
 ```
 
-运行所有严格沿海城市批量零碳调度优化前，先在 `scripts/run_optimize.py` 的 `main()` 中修改函数输入参数，例如：
+运行所有沿海城市批量零碳调度优化前，先在 `scripts/run_optimize.py` 的 `main()` 中修改函数输入参数，例如：
 
 ```python
-_, _, output_files = run_strict_coastal_optimizations(
+_, _, output_files = run_optimizations(
     cooling="seawater",
     objectives=("min-grid-mwh", "min-grid-co2"),
     rated_it_power_kw=20000.0,
@@ -180,9 +180,9 @@ python -m scripts.run_optimize
 单城市优化也可以在 Python 中直接调用：
 
 ```python
-from optimization.optimize_zero_carbon import run_optimization
+from optimization.optimize_zero_carbon import optimization
 
-result = run_optimization(
+result = optimization(
     city="Shanghai",
     cooling="seawater",
     wind_capacity_mw=75.21,
@@ -207,7 +207,7 @@ datacenter_energy_<city>_<cooling_type>_<rated_power>.csv
 wind_capacity_<city>_<cooling_type>_<rated_power>.csv
 ```
 
-严格沿海城市基准测试会生成三张表：
+沿海城市基准测试会生成三张表：
 
 ```text
 baseline_air_source_results_<rated_power>_<hours>.csv
@@ -215,7 +215,7 @@ baseline_seawater_results_<rated_power>_<hours>.csv
 baseline_summary_<rated_power>_<hours>.csv
 ```
 
-严格沿海城市批量零碳调度优化会生成三张表，不保存每个城市的 8760 小时明细：
+沿海城市批量零碳调度优化会生成三张表，不保存每个城市的 8760 小时明细：
 
 ```text
 strict_coastal_optimization_city_results_<cooling>_<hours>.csv

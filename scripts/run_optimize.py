@@ -74,7 +74,7 @@ HOURLY_RESULT_KEYS = {
 }
 
 
-def run_strict_coastal_optimizations(
+def run_optimizations(
     *,
     cooling: str = "seawater",
     objectives: Iterable[str] = ("min-grid-mwh", "min-grid-co2"),
@@ -605,7 +605,7 @@ def _hours_token(hours: int | None) -> str:
 
 
 def main() -> None:
-    _, _, output_files = run_strict_coastal_optimizations(
+    _, _, output_files = run_optimizations(
         cooling="seawater",
         objectives=("min-grid-mwh", "min-grid-co2"),
         workload_file=WORKLOAD_FILE,
