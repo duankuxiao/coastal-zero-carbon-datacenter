@@ -54,7 +54,7 @@
 └── results/                                  # 计算结果输出目录
 ```
 
-根目录不再保留 `run_baseline.py`。所有批量运行入口统一放在 `scripts/` 中，推荐使用 `python -m scripts.run_baseline` 和 `python -m scripts.run_optimize`。
+所有批量运行入口统一放在 `scripts/` 中，推荐使用 `python -m scripts.run_baseline` 和 `python -m scripts.run_optimize`。
 
 ## 数据说明
 
