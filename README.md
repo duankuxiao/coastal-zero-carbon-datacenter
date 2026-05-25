@@ -67,7 +67,7 @@
 - `data/epw_download_toolkit/epw_2025_era5_only/*.epw`：2025 年 ERA5-only AMY EPW 气象文件。核心模型读取解压后的 EPW 目录，不直接读取 zip 包。
 - `data/sst_download_toolkit/sea_surface_temperature_2025_openmeteo.csv`：非 Inland 城市的小时级海表温度，单位为 degC。
 - `data/ci_download_toolkit/carbon_intensity_electricitymaps.csv`：小时级电网碳强度宽表，单位为 gCO2eq/kWh。
-- `data/offshore_wind_download_toolkit/*.nc`：严格沿海城市代表海点的 ERA5 风电气象输入。
+- `data/offshore_wind_download_toolkit/offshore_wind/*.nc`：严格沿海城市代表海点的 ERA5 风电气象输入。
 - `data/offshore_wind_download_toolkit/strict_coastal_offshore_wind_points_manifest.csv`：城市与海上风电代表点、ERA5 网格点的对应关系。
 
 各类下载和再生成脚本位于对应的 `*_download_toolkit` 目录中。
@@ -164,7 +164,7 @@ _, _, output_files = run_strict_coastal_optimizations(
     rated_it_power_kw=20000.0,
     battery_capacity_mwh=535.4,
     battery_roundtrip_efficiency=0.97,
-    grid_import_limit_mw=25.0,
+    grid_import_limit_mw=None,
     battery_charge_limit_mw=25.0,
     battery_discharge_limit_mw=25.0,
     load_shift_fraction=0.3,
@@ -187,7 +187,7 @@ result = run_optimization(
     city="Shanghai",
     cooling="seawater",
     wind_capacity_mw=75.21,
-    wind_nc_file="data/offshore_wind_download_toolkit/OW_006_China_Shanghai_era5_atmos_2025-01-01_2025-12-31.nc",
+    wind_nc_file="data/offshore_wind_download_toolkit/offshore_wind/OW_006_China_Shanghai_era5_atmos_2025-01-01_2025-12-31.nc",
     objective="min-grid-co2",
     include_hourly=False,
     output_results=True,
@@ -216,14 +216,15 @@ baseline_seawater_results_<rated_power>_<hours>.csv
 baseline_summary_<rated_power>_<hours>.csv
 ```
 
-严格沿海城市批量零碳调度优化会生成两张表，不保存每个城市的 8760 小时明细：
+严格沿海城市批量零碳调度优化会生成三张表，不保存每个城市的 8760 小时明细：
 
 ```text
 strict_coastal_optimization_city_results_<cooling>_<hours>.csv
 strict_coastal_optimization_summary_<cooling>_<hours>.csv
+strict_coastal_optimization_country_summary_<cooling>_<hours>.csv
 ```
 
-城市结果表每行对应一个城市和一个优化目标，包含年度需求、风电装机、风电文件、电网购电量、购电碳排放、可再生物理覆盖率、弃风、储能充放电和负荷转移量。汇总表按优化目标聚合，并给出 `min-grid-mwh` 与 `min-grid-co2` 两种目标之间的差值和百分比变化。
+城市结果表每行对应一个城市、策略和优化目标，包含年度需求、风电装机、风电文件、电网购电量、购电碳排放、可再生物理覆盖率、弃风、储能充放电和负荷转移量。汇总表按 `objective + scenario` 聚合全部城市，并计算相对 `baseline` 的能耗、碳排放和购电量节省。国家汇总表按 `country_area + objective + scenario` 聚合，使用同一套相对 `baseline` 的优化效果指标。
 
 ## 模型说明
 

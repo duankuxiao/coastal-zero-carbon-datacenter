@@ -352,6 +352,7 @@ DEFAULT_WIND_NC_FILE = (
     ROOT_DIR
     / "data"
     / "offshore_wind_download_toolkit"
+    / "offshore_wind"
     / "OW_006_China_Shanghai_era5_atmos_2025-01-01_2025-12-31.nc"
 )
 

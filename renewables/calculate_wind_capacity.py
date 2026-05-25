@@ -32,8 +32,9 @@ from energy.calculate_datacenter_energy import (
 
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
-OFFSHORE_WIND_DIR = ROOT_DIR / "data" / "offshore_wind_download_toolkit"
-WIND_MANIFEST_FILE = OFFSHORE_WIND_DIR / "strict_coastal_download_manifest.csv"
+OFFSHORE_WIND_TOOLKIT_DIR = ROOT_DIR / "data" / "offshore_wind_download_toolkit"
+OFFSHORE_WIND_DIR = OFFSHORE_WIND_TOOLKIT_DIR / "offshore_wind"
+WIND_MANIFEST_FILE = OFFSHORE_WIND_TOOLKIT_DIR / "strict_coastal_download_manifest.csv"
 
 CoolingType = Literal["air_source", "seawater"]
 

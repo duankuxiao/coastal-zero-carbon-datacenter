@@ -7,7 +7,7 @@ Windows example:
     python download_era5_strict_coastal_wind_inputs.py ^
         --input ../coastal_datacenter_city_manifest.xlsx ^
         --sheet City_manifest ^
-        --output-dir era5_strict_coastal_wind ^
+        --output-dir . ^
         --start 2024-01-01 --end 2024-12-31 ^
         --mode timeseries --variable-set recommended
 
@@ -386,6 +386,8 @@ def main() -> None:
         points = points[: args.max_points]
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
+    wind_data_dir = args.output_dir / "offshore_wind"
+    wind_data_dir.mkdir(parents=True, exist_ok=True)
     manifest_path = args.output_dir / "strict_coastal_download_manifest.csv"
     write_manifest(points, manifest_path)
 
@@ -400,6 +402,7 @@ def main() -> None:
         "wave_variables": wave_vars,
         "n_points": len(points),
         "manifest": str(manifest_path),
+        "wind_data_dir": str(wind_data_dir),
     }
     (args.output_dir / "request_plan.json").write_text(json.dumps(plan, indent=2, ensure_ascii=False), encoding="utf-8")
     print(json.dumps(plan, indent=2, ensure_ascii=False))
@@ -418,7 +421,7 @@ def main() -> None:
         print(f"\n[POINT] {point_name} lat={lat} lon={lon}")
 
         if args.mode == "timeseries":
-            target = args.output_dir / f"{point_name}_era5_atmos_{args.start}_{args.end}.{suffix}"
+            target = wind_data_dir / f"{point_name}_era5_atmos_{args.start}_{args.end}.{suffix}"
             if target.exists() and not args.overwrite:
                 print(f"[SKIP existing] {target}")
             else:
@@ -426,7 +429,7 @@ def main() -> None:
                 retrieve_timeseries(client, atm_vars, lat, lon, start, end, target, args.data_format)
 
             if wave_vars:
-                target_wave = args.output_dir / f"{point_name}_era5_wave_{args.start}_{args.end}.{suffix}"
+                target_wave = wind_data_dir / f"{point_name}_era5_wave_{args.start}_{args.end}.{suffix}"
                 if target_wave.exists() and not args.overwrite:
                     print(f"[SKIP existing] {target_wave}")
                 else:
@@ -435,14 +438,14 @@ def main() -> None:
 
         else:
             for year, chunk_start, chunk_end in year_chunks(start, end):
-                target = args.output_dir / f"{point_name}_era5_atmos_{year}.{suffix}"
+                target = wind_data_dir / f"{point_name}_era5_atmos_{year}.{suffix}"
                 if target.exists() and not args.overwrite:
                     print(f"[SKIP existing] {target}")
                 else:
                     print(f"[DOWNLOAD] {target}")
                     retrieve_area_year(client, atm_vars, lat, lon, year, chunk_start, chunk_end, target, args.data_format)
                 if wave_vars:
-                    target_wave = args.output_dir / f"{point_name}_era5_wave_{year}.{suffix}"
+                    target_wave = wind_data_dir / f"{point_name}_era5_wave_{year}.{suffix}"
                     if target_wave.exists() and not args.overwrite:
                         print(f"[SKIP existing] {target_wave}")
                     else:

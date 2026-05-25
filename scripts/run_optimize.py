@@ -6,7 +6,8 @@ for every toolkit-ready city in ``data/coastal_datacenter_city_manifest.xlsx``.
 It intentionally does not save 8760-hour per-city dispatch tables. Outputs are:
 
 1. one city/scenario/objective result table;
-2. one aggregate scenario comparison table.
+2. one aggregate scenario comparison table;
+3. one country-level scenario comparison table.
 
 Edit the arguments in ``main()`` before running if you need a different cooling
 mode, objective list, battery setting, or output directory. The baseline set
@@ -86,7 +87,7 @@ def run_strict_coastal_optimizations(
     max_carbon_gap_hours: int = 6,
     battery_capacity_mwh: float = 535.4,
     battery_roundtrip_efficiency: float = 0.97,
-    grid_import_limit_mw: float | None = 25.0,
+    grid_import_limit_mw: float | None = None,
     battery_charge_limit_mw: float | None = 25.0,
     battery_discharge_limit_mw: float | None = 25.0,
     load_shift_fraction: float = 0.3,
@@ -209,19 +210,24 @@ def run_strict_coastal_optimizations(
 
     city_results = pd.DataFrame(rows)
     summary = _build_summary_table(city_results, objective_list, cooling, hours)
+    country_summary = _build_country_summary_table(city_results, objective_list, cooling, hours)
 
     suffix = f"{_filename_token(cooling)}_{_hours_token(hours)}"
     city_results_file = output_path / f"strict_coastal_optimization_city_results_{suffix}.csv"
     summary_file = output_path / f"strict_coastal_optimization_summary_{suffix}.csv"
+    country_summary_file = output_path / f"strict_coastal_optimization_country_summary_{suffix}.csv"
     city_results.to_csv(city_results_file, index=False, encoding="utf-8-sig")
     summary.to_csv(summary_file, index=False, encoding="utf-8-sig")
+    country_summary.to_csv(country_summary_file, index=False, encoding="utf-8-sig")
 
     output_files = {
         "city_results_csv": city_results_file,
         "summary_csv": summary_file,
+        "country_summary_csv": country_summary_file,
     }
     print(f"City/objective results CSV: {city_results_file}")
     print(f"Summary comparison CSV: {summary_file}")
+    print(f"Country scenario comparison CSV: {country_summary_file}")
     return city_results, summary, output_files
 
 
@@ -419,6 +425,56 @@ def _build_summary_table(
     return pd.DataFrame(rows)
 
 
+def _build_country_summary_table(
+    city_results: pd.DataFrame,
+    objectives: Iterable[str],
+    cooling: str,
+    hours: int,
+) -> pd.DataFrame:
+    ok = city_results[city_results["status"] == "ok"].copy() if "status" in city_results else pd.DataFrame()
+    rows: list[dict[str, object]] = []
+    country_column = "country_area"
+
+    if ok.empty or country_column not in ok:
+        return pd.DataFrame(rows)
+
+    ok[country_column] = ok[country_column].fillna("").astype(str)
+    countries = sorted(country for country in ok[country_column].unique() if country.strip())
+    for objective in objectives:
+        for country in countries:
+            country_results = ok[ok[country_column] == country]
+            objective_rows = [
+                _aggregate_scenario(country_results, objective, scenario, cooling, hours)
+                for scenario in SCENARIO_ORDER
+            ]
+            baseline = next(row for row in objective_rows if row["scenario"] == "baseline")
+            for row in objective_rows:
+                row["country_area"] = country
+                row["scope"] = f"country:{country}"
+                _add_baseline_savings(row, baseline)
+                rows.append(row)
+
+    columns = [
+        "country_area",
+        "scope",
+        "value_type",
+        "objective",
+        "scenario",
+        "scenario_label",
+        "cooling_type",
+        "included_city_count",
+        "hours_per_city",
+        *RESULT_METRICS,
+        "energy_savings_mwh_vs_baseline",
+        "energy_savings_pct_vs_baseline",
+        "co2_savings_kg_vs_baseline",
+        "co2_savings_pct_vs_baseline",
+        "grid_purchase_savings_mwh_vs_baseline",
+        "grid_purchase_savings_pct_vs_baseline",
+    ]
+    return pd.DataFrame(rows, columns=columns)
+
+
 def _aggregate_scenario(
     ok_results: pd.DataFrame,
     objective: str,
@@ -561,7 +617,7 @@ def main() -> None:
         max_carbon_gap_hours=6,
         battery_capacity_mwh=535.4,
         battery_roundtrip_efficiency=0.97,
-        grid_import_limit_mw=25.0,
+        grid_import_limit_mw=None,
         battery_charge_limit_mw=25.0,
         battery_discharge_limit_mw=25.0,
         load_shift_fraction=0.3,

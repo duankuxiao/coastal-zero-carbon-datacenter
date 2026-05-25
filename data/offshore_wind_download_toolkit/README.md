@@ -1,6 +1,6 @@
 # ERA5 offshore-wind input toolkit
 
-This folder stores and regenerates ERA5 meteorological inputs for offshore wind-power modelling at strict-coastal representative sea points.
+This folder stores the offshore-wind manifest and regenerates ERA5 meteorological inputs for strict-coastal representative sea points. The meteorological NetCDF files live under `offshore_wind/`.
 
 ## Data Source
 
@@ -10,7 +10,7 @@ This folder stores and regenerates ERA5 meteorological inputs for offshore wind-
   - `reanalysis-era5-single-levels` for small-area fallback
 - CDS ERA5 page: https://cds.climate.copernicus.eu/datasets/reanalysis-era5-single-levels
 - ERA5 documentation: https://confluence.ecmwf.int/display/CKB/ERA5%3A%2Bdata%2Bdocumentation
-- Local output files: `OW_*_era5_atmos_2025-01-01_2025-12-31.nc`
+- Local output files: `offshore_wind/OW_*_era5_atmos_2025-01-01_2025-12-31.nc`
 
 ERA5 is a global atmospheric reanalysis with hourly single-level variables. It is used here to create consistent offshore wind-resource inputs for all strict-coastal cities in the project.
 
@@ -25,9 +25,9 @@ Typical wind years, monthly wind atlases, or land weather stations are not suita
 - `download_era5_strict_coastal_wind_inputs.py`: ERA5 downloader for strict-coastal offshore points.
 - `strict_coastal_download_manifest.csv`: point list written by the downloader.
 - `strict_coastal_offshore_wind_points_manifest.csv`: audited city-to-sea-point mapping, including selected and nearest ERA5 grid coordinates.
-- `request_plan.json`: records the input file, date range, download mode, variable set, and number of points for the current dataset.
+- `request_plan.json`: records the input file, date range, download mode, variable set, wind data directory, and number of points for the current dataset.
 - `era5_offshore_wind_required_variables.csv`: variable list and model-use notes.
-- `OW_*_era5_atmos_2025-01-01_2025-12-31.nc`: one NetCDF file per offshore point.
+- `offshore_wind/OW_*_era5_atmos_2025-01-01_2025-12-31.nc`: one NetCDF file per offshore point.
 
 At the time of this repository snapshot, the manifest contains 89 strict-coastal offshore representative points.
 
@@ -69,6 +69,9 @@ python data/offshore_wind_download_toolkit/download_era5_strict_coastal_wind_inp
   --variable-set recommended
 ```
 
+The manifest and request plan are written to `data/offshore_wind_download_toolkit/`.
+Downloaded atmospheric and wave files are written under `data/offshore_wind_download_toolkit/offshore_wind/`.
+
 Useful options:
 
 - `--dry-run`: write the manifest and request plan without downloading ERA5 data.
@@ -80,7 +83,7 @@ Useful options:
 
 ## Point Selection
 
-The downloader reads `data/target_city_map.csv` and selects rows where `Coastal class == "Strict coastal"`. It uses `Representative sea-point latitude` / `Representative sea-point longitude` when available, otherwise backup sea-point coordinates. The output manifest records whether the representative or backup point was used.
+The downloader reads the `City_manifest` sheet in `data/coastal_datacenter_city_manifest.xlsx` by default and selects rows where `toolkit_ready` is true. It uses `offshore_wind_lat` and `offshore_wind_lon` as the representative sea-point coordinates. The output manifest is written to `strict_coastal_download_manifest.csv`; downstream code uses this manifest plus files in `offshore_wind/` to resolve a city's wind input.
 
 ## Paper Method Note
 
