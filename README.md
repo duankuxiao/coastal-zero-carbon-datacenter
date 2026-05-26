@@ -61,7 +61,7 @@
 
 主要输入数据包括：
 
-- `data/target_city_map.csv`：城市/都市圈、区域、经纬度和沿海分类。
+- `data/coastal_datacenter_city_manifest.csv`：城市/都市圈、区域、经纬度和沿海分类。
 - `data/Workload/*.csv`：小时级 CPU 负载曲线，要求包含 `cpu_load` 列，取值通常为 0 到 1。
 - `data/epw_download_toolkit/target_city_map_epw_coordinates_checked.csv`：EPW 生成坐标、CAMS FOV 判定和目标 EPW 文件名。
 - `data/epw_download_toolkit/epw_2025_era5_only/*.epw`：2025 年 ERA5-only AMY EPW 气象文件。核心模型读取解压后的 EPW 目录，不直接读取 zip 包。
