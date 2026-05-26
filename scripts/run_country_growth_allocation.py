@@ -2,9 +2,10 @@
 
 The runner reads the country, city, and data-center scale sheets from
 data/coastal_datacenter_city_manifest.xlsx. For each country and 2030 scenario,
-every toolkit-ready representative city carries the country's full growth
-capacity. The city capacity is split across small, medium, and large data-center
-scales before running cooling and dispatch comparisons.
+every toolkit-ready representative city carries the coastal portion of the
+country's growth capacity, calculated from Country_manifest
+coastal_share_of_total_pct. The city capacity is split across small, medium,
+and large data-center scales before running cooling and dispatch comparisons.
 """
 
 from __future__ import annotations
@@ -595,6 +596,11 @@ def build_country_growths(country_rows: list[dict[str, object]]) -> pd.DataFrame
         raise ValueError(f"Workbook sheet {COUNTRY_MANIFEST_SHEET} is empty.")
     columns = list(country_rows[0].keys())
     country_column = _find_column(columns, ["country", "country_area", "nation"], "country")
+    coastal_share_column = _find_column(
+        columns,
+        ["coastal_share_of_total_pct", "coastal_share_pct", "coastal_pct"],
+        "coastal share of total percent",
+    )
     baseline_column = _find_2025_capacity_column(columns)
     scenario_columns = _find_2030_capacity_columns(columns)
 
@@ -603,6 +609,12 @@ def build_country_growths(country_rows: list[dict[str, object]]) -> pd.DataFrame
         country = _text(source_row.get(country_column))
         if not country:
             continue
+        coastal_share_pct = _number(source_row.get(coastal_share_column), coastal_share_column)
+        if coastal_share_pct < 0.0 or coastal_share_pct > 100.0:
+            raise ValueError(
+                f"{coastal_share_column} must be between 0 and 100 for country={country}; "
+                f"got {coastal_share_pct:.6g}."
+            )
         baseline_mw = _capacity_to_mw(source_row.get(baseline_column), baseline_column)
         for scenario_column in scenario_columns:
             scenario_capacity_mw = _capacity_to_mw(source_row.get(scenario_column), scenario_column)
@@ -619,6 +631,8 @@ def build_country_growths(country_rows: list[dict[str, object]]) -> pd.DataFrame
                     "baseline_capacity_mw": baseline_mw,
                     "scenario_capacity_mw": scenario_capacity_mw,
                     "growth_mw": growth_mw,
+                    "coastal_share_of_total_pct": coastal_share_pct,
+                    "coastal_growth_mw": growth_mw * coastal_share_pct / 100.0,
                     "baseline_column": baseline_column,
                     "scenario_column": scenario_column,
                 }
@@ -691,7 +705,7 @@ def build_city_scale_allocations(
     scale_definitions: list[ScaleDefinition],
     include_not_ready: bool = False,
 ) -> pd.DataFrame:
-    """Assign each country's full growth to every representative city and scale."""
+    """Assign each country's coastal growth to every representative city and scale."""
     cities_by_country = _cities_by_country(city_rows, include_not_ready=include_not_ready)
     rows: list[dict[str, object]] = []
     for growth_row in country_growths.to_dict(orient="records"):
@@ -699,10 +713,11 @@ def build_city_scale_allocations(
         cities = cities_by_country.get(country, [])
         if not cities:
             raise ValueError(f"No representative cities found for country {country!r}.")
-        growth_mw = float(growth_row["growth_mw"])
+        country_growth_mw = float(growth_row["growth_mw"])
+        city_growth_mw = float(growth_row["coastal_growth_mw"])
         for city in cities:
             for scale_definition in scale_definitions:
-                scale_capacity_mw = growth_mw * scale_definition.ratio
+                scale_capacity_mw = city_growth_mw * scale_definition.ratio
                 split = choose_facility_count(
                     total_mw=scale_capacity_mw,
                     min_mw=scale_definition.min_capacity_mw,
@@ -714,8 +729,8 @@ def build_city_scale_allocations(
                         "growth_scenario": growth_row["growth_scenario"],
                         "city": city,
                         "city_count_in_country": len(cities),
-                        "country_growth_mw": growth_mw,
-                        "city_growth_mw": growth_mw,
+                        "country_growth_mw": country_growth_mw,
+                        "city_growth_mw": city_growth_mw,
                         "scale": scale_definition.scale,
                         "scale_share": scale_definition.ratio,
                         "scale_min_capacity_mw": scale_definition.min_capacity_mw,

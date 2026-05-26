@@ -27,6 +27,7 @@ def test_growth_mw_is_2030_scenario_minus_2025_baseline():
     rows = [
         {
             "country": "A",
+            "coastal_share_of_total_pct": 40.0,
             "total_gw_2025": 1.5,
             "total_gw_2030_Base": 2.0,
             "total_gw_2030_Lift-Off": 2.5,
@@ -41,15 +42,21 @@ def test_growth_mw_is_2030_scenario_minus_2025_baseline():
     assert base["baseline_capacity_mw"] == pytest.approx(1500.0)
     assert base["scenario_capacity_mw"] == pytest.approx(2000.0)
     assert base["growth_mw"] == pytest.approx(500.0)
+    assert base["coastal_share_of_total_pct"] == pytest.approx(40.0)
+    assert base["coastal_growth_mw"] == pytest.approx(200.0)
 
 
-def test_each_city_gets_full_country_growth_instead_of_dividing_by_city_count():
-    allocations = _sample_allocations(country_growth_mw=120.0)
+def test_each_city_gets_country_coastal_growth_instead_of_total_growth():
+    allocations = _sample_allocations(country_growth_mw=120.0, coastal_share_pct=25.0)
 
     assert set(allocations["city"]) == {"A City", "B City"}
-    assert allocations.groupby("city")["city_growth_mw"].first().to_dict() == {
+    assert allocations.groupby("city")["country_growth_mw"].first().to_dict() == {
         "A City": 120.0,
         "B City": 120.0,
+    }
+    assert allocations.groupby("city")["city_growth_mw"].first().to_dict() == {
+        "A City": 30.0,
+        "B City": 30.0,
     }
 
 
@@ -278,8 +285,10 @@ def test_load_shift_main_function_excludes_battery_scenario(tmp_path: Path):
     assert "grid_purchase_mwh_savings_vs_baseline" in city_summary.columns
 
 
-def _sample_allocations(country_growth_mw: float) -> pd.DataFrame:
-    growths = build_country_growths(_country_rows(country_growth_mw=country_growth_mw))
+def _sample_allocations(country_growth_mw: float, coastal_share_pct: float = 100.0) -> pd.DataFrame:
+    growths = build_country_growths(
+        _country_rows(country_growth_mw=country_growth_mw, coastal_share_pct=coastal_share_pct)
+    )
     scales = load_scale_definitions(_scale_rows())
     return build_city_scale_allocations(
         country_growths=growths,
@@ -288,12 +297,13 @@ def _sample_allocations(country_growth_mw: float) -> pd.DataFrame:
     )
 
 
-def _country_rows(country_growth_mw: float) -> list[dict[str, object]]:
+def _country_rows(country_growth_mw: float, coastal_share_pct: float = 100.0) -> list[dict[str, object]]:
     baseline_mw = 1000.0
     scenario_mw = baseline_mw + country_growth_mw
     return [
         {
             "country": "Country",
+            "coastal_share_of_total_pct": coastal_share_pct,
             "total_mw_2025": baseline_mw,
             "total_mw_2030_Base": scenario_mw,
             "total_mw_2030_Lift-Off": scenario_mw,

@@ -182,12 +182,12 @@ python -m scripts.run_load_shift_and_battery_optimization
 
 ## 国家-城市-规模增长容量分配
 
-新增入口 `scripts/run_country_growth_allocation.py` 用于按国家 2030 情景新增容量，生成代表城市和数据中心规模分配，并批量比较两类效果：
+新增入口 `scripts/run_country_growth_allocation.py` 用于按国家 2030 情景新增容量中的沿海部分，生成代表城市和数据中心规模分配，并批量比较两类效果：
 
 - 空气源热泵 vs 海水源热泵冷却系统；
 - 实际容量条件下的风机容量需求与负荷迁移优化效果，当前主结果暂不考虑蓄电池。
 - 命令行入口按 `--mode` 直接调度 `run_country_growth_cooling_comparison(...)` 和 `run_country_growth_load_shift_optimization(...)`；`--mode all` 会依次运行两类汇总。
-- `city_scale_allocations.csv` 保留 small / medium / large 的分配明细；城市和国家层面的主结果均为三种规模合并后的 `all_scales` 结果。
+- `city_scale_allocations.csv` 保留 small / medium / large 的分配明细；每个代表城市承载该国家该情景的沿海新增容量，即国家总增长容量乘以 `Country_manifest.coastal_share_of_total_pct / 100`；城市和国家层面的主结果均为三种规模合并后的 `all_scales` 结果。
 - 冷却系统对比以 `air_source` 为 baseline，`seawater` 为对比方案；负荷迁移优化以 `optimization_scenario == baseline` 为 baseline。
 - 负荷迁移主结果仅包含 `baseline` 和 `load_shift`，不包含蓄电池场景。
 - 国家结果不是城市求和，而是该国家所有代表城市整体结果的算术平均，并保留 `representative_city_count`。
@@ -228,14 +228,14 @@ run_country_growth_load_shift_optimization(output_dir="results/country_growth_lo
 
 默认读取 `data/coastal_datacenter_city_manifest.xlsx` 中的三个 sheet：
 
-- `Country_manifest`：需要国家列、一个 2025 基准容量列和四个 2030 情景容量列。当前文件使用 `country`、`total_gw_2025`、`total_gw_2030_Base`、`total_gw_2030_Lift-Off`、`total_gw_2030_High Efficiency`、`total_gw_2030_Headwinds`。脚本会识别 MW/GW 单位并统一转换为 MW，增长值为 `2030 情景容量 - 2025 基准容量`。
-- `City_manifest`：需要 `country`、`datacentermap_market` 和 `toolkit_ready`。默认只使用 `toolkit_ready` 为 true / 1 / yes 的城市；加 `--include-not-ready` 可取消该过滤。每个代表城市都承载该国家该情景的完整新增容量，国家结果对代表城市做算术平均。
+- `Country_manifest`：需要国家列、沿海占比列、一个 2025 基准容量列和四个 2030 情景容量列。当前文件使用 `country`、`coastal_share_of_total_pct`、`total_gw_2025`、`total_gw_2030_Base`、`total_gw_2030_Lift-Off`、`total_gw_2030_High Efficiency`、`total_gw_2030_Headwinds`。脚本会识别 MW/GW 单位并统一转换为 MW，总增长值为 `2030 情景容量 - 2025 基准容量`，城市分配使用的沿海增长值为 `总增长值 * coastal_share_of_total_pct / 100`。
+- `City_manifest`：需要 `country`、`datacentermap_market` 和 `toolkit_ready`。默认只使用 `toolkit_ready` 为 true / 1 / yes 的城市；加 `--include-not-ready` 可取消该过滤。每个代表城市都承载该国家该情景的沿海新增容量，国家结果对代表城市做算术平均。
 - `Datacenter_scale`：需要规模、比例、最小容量 MW、最大容量 MW。当前文件使用 `category`、`ratio`、`lower_bound_mw`、`upper_bound_mw`。比例必须合计为 1 或 100。
 
 输出文件写入 `--output-dir`，均使用 `utf-8-sig`：
 
-- `country_growths.csv`：国家在四种 2030 情景下的新增容量。
-- `city_scale_allocations.csv`：每个 country × scenario × city × small/medium/large 的容量、设施数量和单体容量。
+- `country_growths.csv`：国家在四种 2030 情景下的总新增容量、沿海占比和沿海新增容量。
+- `city_scale_allocations.csv`：每个 country × scenario × city × small/medium/large 的沿海容量、设施数量和单体容量。
 - `country_growth_cooling_city_summary_<hours>.csv`：四种情景下城市级 `all_scales` 海水源相对空气源热泵的提升效果。
 - `country_growth_cooling_country_summary_<hours>.csv`：国家级 `all_scales` 海水源相对空气源热泵的提升效果，按代表城市算术平均。
 - `country_growth_load_shift_city_summary_<hours>.csv`：城市级风机容量需求和负荷迁移相对 baseline 的优化效果。
