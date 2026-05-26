@@ -26,6 +26,7 @@
 ├── scripts/
 │   ├── run_air_source_vs_seawater_heat_pump_comparison.py  # 空气源热泵/海水源热泵对比批量基准测试
 │   ├── run_load_shift_and_battery_optimization.py          # 负荷迁移与蓄电池批量优化
+│   ├── run_country_growth_allocation.py                    # 国家-城市-规模增长容量分配批量计算
 │   └── __init__.py
 ├── energy/
 │   ├── calculate_datacenter_energy.py         # 单城市数据中心能耗/排放计算入口
@@ -54,7 +55,7 @@
 └── results/                                  # 计算结果输出目录
 ```
 
-所有批量运行入口统一放在 `scripts/` 中，推荐使用 `python -m scripts.run_air_source_vs_seawater_heat_pump_comparison` 和 `python -m scripts.run_load_shift_and_battery_optimization`。
+所有批量运行入口统一放在 `scripts/` 中，推荐使用 `python -m scripts.run_air_source_vs_seawater_heat_pump_comparison`、`python -m scripts.run_load_shift_and_battery_optimization` 和 `python -m scripts.run_country_growth_allocation`。
 
 ## 数据说明
 
@@ -178,6 +179,45 @@ _, _, output_files = run_optimizations(
 ```bash
 python -m scripts.run_load_shift_and_battery_optimization
 ```
+
+## 国家-城市-规模增长容量分配
+
+新增入口 `scripts/run_country_growth_allocation.py` 用于按国家 2030 情景新增容量，生成代表城市和数据中心规模分配，并批量比较两类效果：
+
+- 空气源热泵 vs 海水源热泵冷却系统；
+- 海水源基线、负荷迁移、负荷迁移 + 蓄电池等优化手段。
+
+先运行 dry-run 可只检查容量增长和规模分配，不调用能耗、风电或优化模型：
+
+```bash
+python -m scripts.run_country_growth_allocation ^
+  --dry-run ^
+  --output-dir results/country_growth_allocation
+```
+
+完整计算示例：
+
+```bash
+python -m scripts.run_country_growth_allocation ^
+  --hours 8760 ^
+  --start-time "2025-01-01 00:00" ^
+  --output-dir results/country_growth_allocation
+```
+
+默认读取 `data/coastal_datacenter_city_manifest.xlsx` 中的三个 sheet：
+
+- `Country_manifest`：需要国家列、一个 2025 基准容量列和四个 2030 情景容量列。当前文件使用 `country`、`total_gw_2025`、`total_gw_2030_Base`、`total_gw_2030_Lift-Off`、`total_gw_2030_High Efficiency`、`total_gw_2030_Headwinds`。脚本会识别 MW/GW 单位并统一转换为 MW，增长值为 `2030 情景容量 - 2025 基准容量`。
+- `City_manifest`：需要 `country`、`datacentermap_market` 和 `toolkit_ready`。默认只使用 `toolkit_ready` 为 true / 1 / yes 的城市；加 `--include-not-ready` 可取消该过滤。每个代表城市都承载该国家该情景的完整新增容量，国家结果对代表城市做算术平均。
+- `Datacenter_scale`：需要规模、比例、最小容量 MW、最大容量 MW。当前文件使用 `category`、`ratio`、`lower_bound_mw`、`upper_bound_mw`。比例必须合计为 1 或 100。
+
+输出文件写入 `--output-dir`，均使用 `utf-8-sig`：
+
+- `country_growths.csv`：国家在四种 2030 情景下的新增容量。
+- `city_scale_allocations.csv`：每个 country × scenario × city × small/medium/large 的容量、设施数量和单体容量。
+- `country_growth_cooling_city_results_<hours>.csv`：四种情景下城市级冷却系统对比结果。
+- `country_growth_optimization_city_results_<hours>.csv`：四种情景下城市级优化效果结果。
+- `country_growth_cooling_country_results_<hours>.csv`：国家级冷却系统对比结果，按代表城市算术平均。
+- `country_growth_optimization_country_results_<hours>.csv`：国家级优化效果结果，按代表城市算术平均。
 
 单城市优化也可以在 Python 中直接调用：
 
