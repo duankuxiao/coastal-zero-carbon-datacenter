@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="figures/logo.png" alt="Logo" width="200"/>
+  <img src="figures/logo.png" alt="Logo" width="180"/>
 </p>
 
 # Coastal Zero-Carbon Datacenter
@@ -157,6 +157,8 @@ python -m scripts.run_baseline ^
 运行所有沿海城市批量零碳调度优化前，先在 `scripts/run_optimize.py` 的 `main()` 中修改函数输入参数，例如：
 
 ```python
+from scripts.run_optimize import run_optimizations
+
 _, _, output_files = run_optimizations(
     cooling="seawater",
     objectives=("min-grid-mwh", "min-grid-co2"),
