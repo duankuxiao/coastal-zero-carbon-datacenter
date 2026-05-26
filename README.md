@@ -24,8 +24,8 @@
 ```text
 .
 ├── scripts/
-│   ├── run_baseline.py                        # 沿海城市空气源/海水源批量基准测试
-│   ├── run_optimize.py                        # 沿海城市批量零碳调度优化
+│   ├── run_air_source_vs_seawater_heat_pump_comparison.py  # 空气源热泵/海水源热泵对比批量基准测试
+│   ├── run_load_shift_and_battery_optimization.py          # 负荷迁移与蓄电池批量优化
 │   └── __init__.py
 ├── energy/
 │   ├── calculate_datacenter_energy.py         # 单城市数据中心能耗/排放计算入口
@@ -54,7 +54,7 @@
 └── results/                                  # 计算结果输出目录
 ```
 
-所有批量运行入口统一放在 `scripts/` 中，推荐使用 `python -m scripts.run_baseline` 和 `python -m scripts.run_optimize`。
+所有批量运行入口统一放在 `scripts/` 中，推荐使用 `python -m scripts.run_air_source_vs_seawater_heat_pump_comparison` 和 `python -m scripts.run_load_shift_and_battery_optimization`。
 
 ## 数据说明
 
@@ -144,7 +144,7 @@ python -m renewables.calculate_wind_capacity ^
 运行沿海城市空气源/海水源批量基准测试：
 
 ```bash
-python -m scripts.run_baseline ^
+python -m scripts.run_air_source_vs_seawater_heat_pump_comparison ^
   --rated-it-power-kw 20000 ^
   --idle-power-fraction 0.3 ^
   --hours 8760 ^
@@ -154,10 +154,10 @@ python -m scripts.run_baseline ^
   --output-dir results
 ```
 
-运行所有沿海城市批量零碳调度优化前，先在 `scripts/run_optimize.py` 的 `main()` 中修改函数输入参数，例如：
+运行所有沿海城市批量零碳调度优化前，先在 `scripts/run_load_shift_and_battery_optimization.py` 的 `main()` 中修改函数输入参数，例如：
 
 ```python
-from scripts.run_optimize import run_optimizations
+from scripts.run_load_shift_and_battery_optimization import run_optimizations
 
 _, _, output_files = run_optimizations(
     cooling="seawater",
@@ -176,7 +176,7 @@ _, _, output_files = run_optimizations(
 然后运行：
 
 ```bash
-python -m scripts.run_optimize
+python -m scripts.run_load_shift_and_battery_optimization
 ```
 
 单城市优化也可以在 Python 中直接调用：
@@ -247,7 +247,7 @@ strict_coastal_optimization_country_summary_<cooling>_<hours>.csv
 
 - `seawater` 默认使用 `sst`，以 SST 文件 timestamp 作为主时间轴。
 - `air_source` 默认使用 `latest`，使用碳强度文件中最新的可用时间窗口。
-- `scripts.run_baseline` 默认使用 `sst`，保证空气源与海水源使用同一时期碳排放因子。
+- `scripts.run_air_source_vs_seawater_heat_pump_comparison` 默认使用 `sst`，保证空气源与海水源使用同一时期碳排放因子。
 - 指定 `--start-time "2025-01-01 00:00"` 时，可切换到从指定时间开始截取 `hours` 小时。
 - 碳强度缺少少量小时会按时间插值，默认最大连续缺口为 6 小时，可通过 `--max-carbon-gap-hours` 调整。
 - EPW 干球温度按 2025 年 AMY EPW 的 8760 小时读取，并按目标 timestamp 的 day-of-year/hour 映射到仿真时间轴。
@@ -322,7 +322,7 @@ python data/offshore_wind_download_toolkit/download_era5_strict_coastal_wind_inp
 - 批量 baseline 中缺少有效碳强度、SST 或风电输入数据的城市会被跳过，并在命令行输出跳过原因。
 - 批量优化默认不保存每个城市的 8760 小时明细，避免输出文件过多；如需单城市小时级结果，请调用 `run_optimization(..., output_results=True, include_hourly=True)`。
 
-### `scripts/run_optimize.py` 结果字段说明
+### `scripts/run_load_shift_and_battery_optimization.py` 结果字段说明
 
 批量优化会在汇总表中按 `objective` 和 `scenario` 对比三种场景：
 

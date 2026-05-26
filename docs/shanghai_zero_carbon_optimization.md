@@ -149,7 +149,7 @@ optimization/optimize_zero_carbon.py
 ```
 
 The single-city optimizer remains in `optimization/optimize_zero_carbon.py`.
-The batch runner in `scripts/run_optimize.py` now runs all strict-coastal
+The batch runner in `scripts/run_load_shift_and_battery_optimization.py` now runs all strict-coastal
 cities. Example batch configuration:
 
 ```python
@@ -170,7 +170,7 @@ _, _, output_files = run_strict_coastal_optimizations(
 Run it with:
 
 ```bash
-python -m scripts.run_optimize
+python -m scripts.run_load_shift_and_battery_optimization
 ```
 
 Set `objectives=("min-grid-mwh", "min-grid-co2")` in the batch runner to compare

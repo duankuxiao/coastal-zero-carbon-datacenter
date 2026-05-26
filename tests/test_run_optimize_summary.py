@@ -1,7 +1,10 @@
 import pandas as pd
 import pytest
 
-from scripts.run_optimize import _build_country_summary_table, _build_summary_table
+from scripts.run_load_shift_and_battery_optimization import (
+    _build_country_summary_table,
+    _build_summary_table,
+)
 
 
 def test_summary_compares_optimization_scenarios_against_baseline():
