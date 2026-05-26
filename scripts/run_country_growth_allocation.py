@@ -13,6 +13,8 @@ import argparse
 import math
 import re
 import sys
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Callable, Iterable
@@ -111,6 +113,7 @@ def run_country_growth_allocation(
     output_dir: str | Path = DEFAULT_OUTPUT_DIR,
     include_not_ready: bool = False,
     dry_run: bool = False,
+    mode: str = "all",
     workload_file: str | Path = WORKLOAD_FILE,
     idle_power_fraction: float = 0.35,
     hours: int | None = 8760,
@@ -130,16 +133,20 @@ def run_country_growth_allocation(
     wind_cut_in: float = 3.0,
     wind_rated: float = 12.0,
     wind_cut_out: float = 25.0,
+    workers: int = 1,
     country_rows: list[dict[str, object]] | None = None,
     city_rows: list[dict[str, object]] | None = None,
     scale_rows: list[dict[str, object]] | None = None,
     energy_calculator: EnergyCalculator = calculate_data_center_energy,
     wind_calculator: WindCalculator = calculate_wind_resource,
     optimizer: Optimizer = optimization,
+    write_debug_scale_results: bool = False,
 ) -> dict[str, Path]:
     """Run country-growth allocation and write CSV outputs."""
+    run_mode = _normalize_mode(mode)
     manifest_path = _resolve_path(manifest_file)
     output_path = _resolve_output_dir(output_dir)
+    worker_count = _normalize_workers(workers)
     if country_rows is None:
         country_rows = _read_xlsx_sheet_rows(manifest_path, COUNTRY_MANIFEST_SHEET)
     if city_rows is None:
@@ -164,9 +171,276 @@ def run_country_growth_allocation(
     energy_cache: dict[tuple[object, ...], DataCenterEnergyResult] = {}
     wind_resource_cache: dict[tuple[object, ...], WindResourceResult] = {}
     required_wind_cache: dict[tuple[object, ...], RequiredWindCapacity] = {}
+    energy_cache_locks: dict[tuple[object, ...], threading.Lock] = {}
+    wind_resource_cache_locks: dict[tuple[object, ...], threading.Lock] = {}
+    required_wind_cache_locks: dict[tuple[object, ...], threading.Lock] = {}
+    cache_locks_guard = threading.Lock()
 
+    if run_mode in {"all", "cooling"}:
+        output_files.update(
+            _run_country_growth_cooling_outputs(
+                output_path=output_path,
+                allocations=city_scale_allocations,
+                workload_file=workload_file,
+                idle_power_fraction=idle_power_fraction,
+                hours=hours,
+                start_time=start_time,
+                time_alignment=time_alignment,
+                max_carbon_gap_hours=max_carbon_gap_hours,
+                hub_height_m=hub_height_m,
+                wind_loss_fraction=wind_loss_fraction,
+                wind_cut_in=wind_cut_in,
+                wind_rated=wind_rated,
+                wind_cut_out=wind_cut_out,
+                energy_cache=energy_cache,
+                wind_resource_cache=wind_resource_cache,
+                energy_cache_locks=energy_cache_locks,
+                wind_resource_cache_locks=wind_resource_cache_locks,
+                cache_locks_guard=cache_locks_guard,
+                energy_calculator=energy_calculator,
+                wind_calculator=wind_calculator,
+                workers=worker_count,
+                write_debug_scale_results=write_debug_scale_results,
+            )
+        )
+
+    if run_mode in {"all", "load-shift"}:
+        output_files.update(
+            _run_country_growth_load_shift_outputs(
+                output_path=output_path,
+                allocations=city_scale_allocations,
+                cooling=cooling,
+                objectives=tuple(objectives),
+                workload_file=workload_file,
+                idle_power_fraction=idle_power_fraction,
+                hours=hours,
+                start_time=start_time,
+                time_alignment=time_alignment,
+                max_carbon_gap_hours=max_carbon_gap_hours,
+                battery_roundtrip_efficiency=battery_roundtrip_efficiency,
+                grid_import_limit_mw=grid_import_limit_mw,
+                load_shift_fraction=load_shift_fraction,
+                hub_height_m=hub_height_m,
+                wind_loss_fraction=wind_loss_fraction,
+                wind_cut_in=wind_cut_in,
+                wind_rated=wind_rated,
+                wind_cut_out=wind_cut_out,
+                energy_cache=energy_cache,
+                wind_resource_cache=wind_resource_cache,
+                required_wind_cache=required_wind_cache,
+                energy_cache_locks=energy_cache_locks,
+                wind_resource_cache_locks=wind_resource_cache_locks,
+                required_wind_cache_locks=required_wind_cache_locks,
+                cache_locks_guard=cache_locks_guard,
+                energy_calculator=energy_calculator,
+                wind_calculator=wind_calculator,
+                optimizer=optimizer,
+                workers=worker_count,
+                write_debug_scale_results=write_debug_scale_results,
+            )
+        )
+
+    for label, path in output_files.items():
+        print(f"{label}: {path}")
+    return output_files
+
+
+def run_country_growth_cooling_comparison(
+    *,
+    manifest_file: str | Path = CITY_MAP_FILE,
+    output_dir: str | Path = DEFAULT_OUTPUT_DIR,
+    include_not_ready: bool = False,
+    workload_file: str | Path = WORKLOAD_FILE,
+    idle_power_fraction: float = 0.35,
+    hours: int | None = 8760,
+    start_time: str | None = "2025-01-01 00:00",
+    time_alignment: str | None = None,
+    max_carbon_gap_hours: int = 6,
+    hub_height_m: float = 150.0,
+    wind_loss_fraction: float = 0.15,
+    wind_cut_in: float = 3.0,
+    wind_rated: float = 12.0,
+    wind_cut_out: float = 25.0,
+    workers: int = 1,
+    country_rows: list[dict[str, object]] | None = None,
+    city_rows: list[dict[str, object]] | None = None,
+    scale_rows: list[dict[str, object]] | None = None,
+    energy_calculator: EnergyCalculator = calculate_data_center_energy,
+    wind_calculator: WindCalculator = calculate_wind_resource,
+    write_debug_scale_results: bool = False,
+) -> dict[str, Path]:
+    """Write city/country summaries comparing seawater cooling against air-source cooling."""
+    output_path, country_growths, city_scale_allocations = _prepare_country_growth_inputs(
+        manifest_file=manifest_file,
+        output_dir=output_dir,
+        include_not_ready=include_not_ready,
+        country_rows=country_rows,
+        city_rows=city_rows,
+        scale_rows=scale_rows,
+    )
+    output_files = _write_foundation_outputs(output_path, country_growths, city_scale_allocations)
+    cache_locks_guard = threading.Lock()
+    output_files.update(
+        _run_country_growth_cooling_outputs(
+            output_path=output_path,
+            allocations=city_scale_allocations,
+            workload_file=workload_file,
+            idle_power_fraction=idle_power_fraction,
+            hours=hours,
+            start_time=start_time,
+            time_alignment=time_alignment,
+            max_carbon_gap_hours=max_carbon_gap_hours,
+            hub_height_m=hub_height_m,
+            wind_loss_fraction=wind_loss_fraction,
+            wind_cut_in=wind_cut_in,
+            wind_rated=wind_rated,
+            wind_cut_out=wind_cut_out,
+            energy_cache={},
+            wind_resource_cache={},
+            energy_cache_locks={},
+            wind_resource_cache_locks={},
+            cache_locks_guard=cache_locks_guard,
+            energy_calculator=energy_calculator,
+            wind_calculator=wind_calculator,
+            workers=_normalize_workers(workers),
+            write_debug_scale_results=write_debug_scale_results,
+        )
+    )
+    return output_files
+
+
+def run_country_growth_load_shift_optimization(
+    *,
+    manifest_file: str | Path = CITY_MAP_FILE,
+    output_dir: str | Path = DEFAULT_OUTPUT_DIR,
+    include_not_ready: bool = False,
+    cooling: str = "seawater",
+    objectives: Iterable[str] = ("min-grid-mwh", "min-grid-co2"),
+    workload_file: str | Path = WORKLOAD_FILE,
+    idle_power_fraction: float = 0.35,
+    hours: int | None = 8760,
+    start_time: str | None = "2025-01-01 00:00",
+    time_alignment: str | None = None,
+    max_carbon_gap_hours: int = 6,
+    battery_roundtrip_efficiency: float = 0.97,
+    grid_import_limit_mw: float | None = None,
+    load_shift_fraction: float = 0.3,
+    hub_height_m: float = 150.0,
+    wind_loss_fraction: float = 0.15,
+    wind_cut_in: float = 3.0,
+    wind_rated: float = 12.0,
+    wind_cut_out: float = 25.0,
+    workers: int = 1,
+    country_rows: list[dict[str, object]] | None = None,
+    city_rows: list[dict[str, object]] | None = None,
+    scale_rows: list[dict[str, object]] | None = None,
+    energy_calculator: EnergyCalculator = calculate_data_center_energy,
+    wind_calculator: WindCalculator = calculate_wind_resource,
+    optimizer: Optimizer = optimization,
+    write_debug_scale_results: bool = False,
+) -> dict[str, Path]:
+    """Write city/country summaries for wind capacity demand and load-shift optimization."""
+    output_path, country_growths, city_scale_allocations = _prepare_country_growth_inputs(
+        manifest_file=manifest_file,
+        output_dir=output_dir,
+        include_not_ready=include_not_ready,
+        country_rows=country_rows,
+        city_rows=city_rows,
+        scale_rows=scale_rows,
+    )
+    output_files = _write_foundation_outputs(output_path, country_growths, city_scale_allocations)
+    cache_locks_guard = threading.Lock()
+    output_files.update(
+        _run_country_growth_load_shift_outputs(
+            output_path=output_path,
+            allocations=city_scale_allocations,
+            cooling=cooling,
+            objectives=tuple(objectives),
+            workload_file=workload_file,
+            idle_power_fraction=idle_power_fraction,
+            hours=hours,
+            start_time=start_time,
+            time_alignment=time_alignment,
+            max_carbon_gap_hours=max_carbon_gap_hours,
+            battery_roundtrip_efficiency=battery_roundtrip_efficiency,
+            grid_import_limit_mw=grid_import_limit_mw,
+            load_shift_fraction=load_shift_fraction,
+            hub_height_m=hub_height_m,
+            wind_loss_fraction=wind_loss_fraction,
+            wind_cut_in=wind_cut_in,
+            wind_rated=wind_rated,
+            wind_cut_out=wind_cut_out,
+            energy_cache={},
+            wind_resource_cache={},
+            required_wind_cache={},
+            energy_cache_locks={},
+            wind_resource_cache_locks={},
+            required_wind_cache_locks={},
+            cache_locks_guard=cache_locks_guard,
+            energy_calculator=energy_calculator,
+            wind_calculator=wind_calculator,
+            optimizer=optimizer,
+            workers=_normalize_workers(workers),
+            write_debug_scale_results=write_debug_scale_results,
+        )
+    )
+    return output_files
+
+
+def _prepare_country_growth_inputs(
+    *,
+    manifest_file: str | Path,
+    output_dir: str | Path,
+    include_not_ready: bool,
+    country_rows: list[dict[str, object]] | None,
+    city_rows: list[dict[str, object]] | None,
+    scale_rows: list[dict[str, object]] | None,
+) -> tuple[Path, pd.DataFrame, pd.DataFrame]:
+    manifest_path = _resolve_path(manifest_file)
+    output_path = _resolve_output_dir(output_dir)
+    if country_rows is None:
+        country_rows = _read_xlsx_sheet_rows(manifest_path, COUNTRY_MANIFEST_SHEET)
+    if city_rows is None:
+        city_rows = _read_xlsx_sheet_rows(manifest_path, CITY_MANIFEST_SHEET)
+    if scale_rows is None:
+        scale_rows = _read_xlsx_sheet_rows(manifest_path, DATACENTER_SCALE_SHEET)
+    country_growths = build_country_growths(country_rows)
+    city_scale_allocations = build_city_scale_allocations(
+        country_growths=country_growths,
+        city_rows=city_rows,
+        scale_definitions=load_scale_definitions(scale_rows),
+        include_not_ready=include_not_ready,
+    )
+    return output_path, country_growths, city_scale_allocations
+
+
+def _run_country_growth_cooling_outputs(
+    *,
+    output_path: Path,
+    allocations: pd.DataFrame,
+    workload_file: str | Path,
+    idle_power_fraction: float,
+    hours: int | None,
+    start_time: str | None,
+    time_alignment: str | None,
+    max_carbon_gap_hours: int,
+    hub_height_m: float,
+    wind_loss_fraction: float,
+    wind_cut_in: float,
+    wind_rated: float,
+    wind_cut_out: float,
+    energy_cache: dict[tuple[object, ...], DataCenterEnergyResult],
+    wind_resource_cache: dict[tuple[object, ...], WindResourceResult],
+    energy_cache_locks: dict[tuple[object, ...], threading.Lock],
+    wind_resource_cache_locks: dict[tuple[object, ...], threading.Lock],
+    cache_locks_guard: threading.Lock,
+    energy_calculator: EnergyCalculator,
+    wind_calculator: WindCalculator,
+    workers: int,
+    write_debug_scale_results: bool,
+) -> dict[str, Path]:
     cooling_city_scale = run_cooling_comparisons(
-        allocations=city_scale_allocations,
+        allocations=allocations,
         workload_file=workload_file,
         idle_power_fraction=idle_power_fraction,
         hours=hours,
@@ -180,31 +454,89 @@ def run_country_growth_allocation(
         wind_cut_out=wind_cut_out,
         energy_cache=energy_cache,
         wind_resource_cache=wind_resource_cache,
+        energy_cache_locks=energy_cache_locks,
+        wind_resource_cache_locks=wind_resource_cache_locks,
+        cache_locks_guard=cache_locks_guard,
         energy_calculator=energy_calculator,
         wind_calculator=wind_calculator,
+        workers=workers,
     )
-    cooling_city_results = append_scale_totals(cooling_city_scale, COOLING_METRICS, extra_group_columns=["cooling_type"])
+    cooling_city_results = select_all_scale_results(
+        append_scale_totals(cooling_city_scale, COOLING_METRICS, extra_group_columns=["cooling_type"])
+    )
     cooling_country_results = build_country_average_results(
         cooling_city_results,
         metric_columns=COOLING_METRICS,
         extra_group_columns=["cooling_type", "scale"],
     )
+    cooling_city_summary = build_cooling_comparison_results(cooling_city_results)
+    cooling_country_summary = build_cooling_comparison_results(cooling_country_results)
 
+    suffix = _hours_token(hours)
+    files = {
+        "cooling_city_summary_csv": output_path / f"country_growth_cooling_city_summary_{suffix}.csv",
+        "cooling_country_summary_csv": output_path / f"country_growth_cooling_country_summary_{suffix}.csv",
+    }
+    cooling_city_summary.to_csv(files["cooling_city_summary_csv"], index=False, encoding="utf-8-sig")
+    cooling_country_summary.to_csv(files["cooling_country_summary_csv"], index=False, encoding="utf-8-sig")
+    if write_debug_scale_results:
+        files["cooling_scale_debug_csv"] = output_path / f"country_growth_cooling_scale_debug_{suffix}.csv"
+        cooling_city_scale.to_csv(files["cooling_scale_debug_csv"], index=False, encoding="utf-8-sig")
+    return files
+
+
+def _run_country_growth_load_shift_outputs(
+    *,
+    output_path: Path,
+    allocations: pd.DataFrame,
+    cooling: str,
+    objectives: tuple[str, ...],
+    workload_file: str | Path,
+    idle_power_fraction: float,
+    hours: int | None,
+    start_time: str | None,
+    time_alignment: str | None,
+    max_carbon_gap_hours: int,
+    battery_roundtrip_efficiency: float,
+    grid_import_limit_mw: float | None,
+    load_shift_fraction: float,
+    hub_height_m: float,
+    wind_loss_fraction: float,
+    wind_cut_in: float,
+    wind_rated: float,
+    wind_cut_out: float,
+    energy_cache: dict[tuple[object, ...], DataCenterEnergyResult],
+    wind_resource_cache: dict[tuple[object, ...], WindResourceResult],
+    required_wind_cache: dict[tuple[object, ...], RequiredWindCapacity],
+    energy_cache_locks: dict[tuple[object, ...], threading.Lock],
+    wind_resource_cache_locks: dict[tuple[object, ...], threading.Lock],
+    required_wind_cache_locks: dict[tuple[object, ...], threading.Lock],
+    cache_locks_guard: threading.Lock,
+    energy_calculator: EnergyCalculator,
+    wind_calculator: WindCalculator,
+    optimizer: Optimizer,
+    workers: int,
+    write_debug_scale_results: bool,
+) -> dict[str, Path]:
     optimization_city_scale = run_optimization_comparisons(
-        allocations=city_scale_allocations,
+        allocations=allocations,
         cooling=cooling,
-        objectives=tuple(objectives),
+        objectives=objectives,
+        scenario_configs=_load_shift_scenario_configs(
+            cooling=cooling,
+            load_shift_fraction=load_shift_fraction,
+        ),
         workload_file=workload_file,
         idle_power_fraction=idle_power_fraction,
         hours=hours,
         start_time=start_time,
         time_alignment=time_alignment,
         max_carbon_gap_hours=max_carbon_gap_hours,
-        battery_capacity_mwh=battery_capacity_mwh,
+        battery_capacity_mwh=0.0,
         battery_roundtrip_efficiency=battery_roundtrip_efficiency,
         grid_import_limit_mw=grid_import_limit_mw,
-        battery_charge_limit_mw=battery_charge_limit_mw,
-        battery_discharge_limit_mw=battery_discharge_limit_mw,
+        battery_charge_limit_mw=0.0,
+        battery_discharge_limit_mw=0.0,
         load_shift_fraction=load_shift_fraction,
         hub_height_m=hub_height_m,
         wind_loss_fraction=wind_loss_fraction,
@@ -214,14 +546,21 @@ def run_country_growth_allocation(
         energy_cache=energy_cache,
         wind_resource_cache=wind_resource_cache,
         required_wind_cache=required_wind_cache,
+        energy_cache_locks=energy_cache_locks,
+        wind_resource_cache_locks=wind_resource_cache_locks,
+        required_wind_cache_locks=required_wind_cache_locks,
+        cache_locks_guard=cache_locks_guard,
         energy_calculator=energy_calculator,
         wind_calculator=wind_calculator,
         optimizer=optimizer,
+        workers=workers,
     )
-    optimization_city_results = append_scale_totals(
-        optimization_city_scale,
-        OPTIMIZATION_RESULT_METRICS,
-        extra_group_columns=["objective", "optimization_scenario", "optimization_scenario_label", "cooling_type"],
+    optimization_city_results = select_all_scale_results(
+        append_scale_totals(
+            optimization_city_scale,
+            OPTIMIZATION_RESULT_METRICS,
+            extra_group_columns=["objective", "optimization_scenario", "optimization_scenario_label", "cooling_type"],
+        )
     )
     optimization_country_results = build_country_average_results(
         optimization_city_results,
@@ -234,22 +573,20 @@ def run_country_growth_allocation(
             "scale",
         ],
     )
+    optimization_city_summary = build_optimization_comparison_results(optimization_city_results)
+    optimization_country_summary = build_optimization_comparison_results(optimization_country_results)
 
     suffix = _hours_token(hours)
     files = {
-        "cooling_city_results_csv": output_path / f"country_growth_cooling_city_results_{suffix}.csv",
-        "optimization_city_results_csv": output_path / f"country_growth_optimization_city_results_{suffix}.csv",
-        "cooling_country_results_csv": output_path / f"country_growth_cooling_country_results_{suffix}.csv",
-        "optimization_country_results_csv": output_path / f"country_growth_optimization_country_results_{suffix}.csv",
+        "load_shift_city_summary_csv": output_path / f"country_growth_load_shift_city_summary_{suffix}.csv",
+        "load_shift_country_summary_csv": output_path / f"country_growth_load_shift_country_summary_{suffix}.csv",
     }
-    cooling_city_results.to_csv(files["cooling_city_results_csv"], index=False, encoding="utf-8-sig")
-    optimization_city_results.to_csv(files["optimization_city_results_csv"], index=False, encoding="utf-8-sig")
-    cooling_country_results.to_csv(files["cooling_country_results_csv"], index=False, encoding="utf-8-sig")
-    optimization_country_results.to_csv(files["optimization_country_results_csv"], index=False, encoding="utf-8-sig")
-    output_files.update(files)
-    for label, path in output_files.items():
-        print(f"{label}: {path}")
-    return output_files
+    optimization_city_summary.to_csv(files["load_shift_city_summary_csv"], index=False, encoding="utf-8-sig")
+    optimization_country_summary.to_csv(files["load_shift_country_summary_csv"], index=False, encoding="utf-8-sig")
+    if write_debug_scale_results:
+        files["load_shift_scale_debug_csv"] = output_path / f"country_growth_load_shift_scale_debug_{suffix}.csv"
+        optimization_city_scale.to_csv(files["load_shift_scale_debug_csv"], index=False, encoding="utf-8-sig")
+    return files
 
 
 def build_country_growths(country_rows: list[dict[str, object]]) -> pd.DataFrame:
@@ -443,60 +780,77 @@ def run_cooling_comparisons(
     wind_cut_out: float,
     energy_cache: dict[tuple[object, ...], DataCenterEnergyResult],
     wind_resource_cache: dict[tuple[object, ...], WindResourceResult],
+    energy_cache_locks: dict[tuple[object, ...], threading.Lock] | None = None,
+    wind_resource_cache_locks: dict[tuple[object, ...], threading.Lock] | None = None,
+    cache_locks_guard: threading.Lock | None = None,
     energy_calculator: EnergyCalculator,
     wind_calculator: WindCalculator,
+    workers: int = 1,
 ) -> pd.DataFrame:
-    rows: list[dict[str, object]] = []
-    total_rows = len(allocations)
-    for index, allocation in enumerate(allocations.to_dict(orient="records"), start=1):
+    worker_count = _normalize_workers(workers)
+    cache_guard = cache_locks_guard or threading.Lock()
+    energy_locks = energy_cache_locks if energy_cache_locks is not None else {}
+    wind_locks = wind_resource_cache_locks if wind_resource_cache_locks is not None else {}
+    tasks: list[tuple[int, int, int, dict[str, object], str]] = []
+    allocation_rows = allocations.to_dict(orient="records")
+    total_allocations = len(allocation_rows)
+    for allocation_index, allocation in enumerate(allocation_rows, start=1):
         for cooling_type in COOLING_TYPES:
-            print(
-                "Cooling "
-                f"{index}/{total_rows}: {allocation['country']} / {allocation['growth_scenario']} / "
-                f"{allocation['city']} / {allocation['scale']} / {cooling_type}",
-                flush=True,
+            tasks.append((len(tasks), allocation_index, total_allocations, allocation, cooling_type))
+
+    def run_task(task: tuple[int, int, int, dict[str, object], str]) -> tuple[int, dict[str, object]]:
+        sequence, allocation_index, total_allocations, allocation, cooling_type = task
+        print(
+            "Cooling "
+            f"{sequence + 1}/{len(tasks)} "
+            f"(allocation {allocation_index}/{total_allocations}): "
+            f"{allocation['country']} / {allocation['growth_scenario']} / "
+            f"{allocation['city']} / {allocation['scale']} / {cooling_type}",
+            flush=True,
+        )
+        row = _base_result_row(allocation)
+        row["cooling_type"] = cooling_type
+        try:
+            if int(allocation["facility_count"]) == 0:
+                return sequence, _zero_cooling_row(row, hours)
+            rated_it_power_kw = float(allocation["facility_capacity_mw"]) * 1000.0
+            energy = _get_energy_result(
+                cache=energy_cache,
+                cache_locks=energy_locks,
+                cache_locks_guard=cache_guard,
+                energy_calculator=energy_calculator,
+                city=str(allocation["city"]),
+                cooling_type=cooling_type,
+                workload_file=workload_file,
+                rated_it_power_kw=rated_it_power_kw,
+                idle_power_fraction=idle_power_fraction,
+                hours=hours,
+                start_time=start_time,
+                time_alignment=time_alignment,
+                max_carbon_gap_hours=max_carbon_gap_hours,
             )
-            row = _base_result_row(allocation)
-            row["cooling_type"] = cooling_type
-            try:
-                if int(allocation["facility_count"]) == 0:
-                    rows.append(_zero_cooling_row(row, hours))
-                    continue
-                rated_it_power_kw = float(allocation["facility_capacity_mw"]) * 1000.0
-                energy = _get_energy_result(
-                    cache=energy_cache,
-                    energy_calculator=energy_calculator,
-                    city=str(allocation["city"]),
-                    cooling_type=cooling_type,
-                    workload_file=workload_file,
-                    rated_it_power_kw=rated_it_power_kw,
-                    idle_power_fraction=idle_power_fraction,
-                    hours=hours,
-                    start_time=start_time,
-                    time_alignment=time_alignment,
-                    max_carbon_gap_hours=max_carbon_gap_hours,
-                )
-                wind_resource = _get_wind_resource(
-                    cache=wind_resource_cache,
-                    wind_calculator=wind_calculator,
-                    city=str(allocation["city"]),
-                    hub_height_m=hub_height_m,
-                    loss_fraction=wind_loss_fraction,
-                    cut_in=wind_cut_in,
-                    rated=wind_rated,
-                    cut_out=wind_cut_out,
-                )
-                rows.append(
-                    _cooling_result_row(
-                        row=row,
-                        energy=energy,
-                        wind_resource=wind_resource,
-                        facility_count=int(allocation["facility_count"]),
-                    )
-                )
-            except Exception as exc:
-                rows.append(_failed_row(row, str(exc)))
-    return pd.DataFrame(rows)
+            wind_resource = _get_wind_resource(
+                cache=wind_resource_cache,
+                cache_locks=wind_locks,
+                cache_locks_guard=cache_guard,
+                wind_calculator=wind_calculator,
+                city=str(allocation["city"]),
+                hub_height_m=hub_height_m,
+                loss_fraction=wind_loss_fraction,
+                cut_in=wind_cut_in,
+                rated=wind_rated,
+                cut_out=wind_cut_out,
+            )
+            return sequence, _cooling_result_row(
+                row=row,
+                energy=energy,
+                wind_resource=wind_resource,
+                facility_count=int(allocation["facility_count"]),
+            )
+        except Exception as exc:
+            return sequence, _failed_row(row, str(exc))
+
+    return pd.DataFrame(_run_parallel_tasks(tasks, run_task, worker_count))
 
 
 def run_optimization_comparisons(
@@ -504,6 +858,7 @@ def run_optimization_comparisons(
     allocations: pd.DataFrame,
     cooling: str,
     objectives: tuple[str, ...],
+    scenario_configs: tuple[dict[str, object], ...] | None = None,
     workload_file: str | Path,
     idle_power_fraction: float,
     hours: int | None,
@@ -524,108 +879,168 @@ def run_optimization_comparisons(
     energy_cache: dict[tuple[object, ...], DataCenterEnergyResult],
     wind_resource_cache: dict[tuple[object, ...], WindResourceResult],
     required_wind_cache: dict[tuple[object, ...], RequiredWindCapacity],
+    energy_cache_locks: dict[tuple[object, ...], threading.Lock] | None = None,
+    wind_resource_cache_locks: dict[tuple[object, ...], threading.Lock] | None = None,
+    required_wind_cache_locks: dict[tuple[object, ...], threading.Lock] | None = None,
+    cache_locks_guard: threading.Lock | None = None,
     energy_calculator: EnergyCalculator,
     wind_calculator: WindCalculator,
     optimizer: Optimizer,
+    workers: int = 1,
 ) -> pd.DataFrame:
-    rows: list[dict[str, object]] = []
-    total_rows = len(allocations)
-    scenario_configs = _scenario_configs(
-        cooling=cooling,
-        load_shift_fraction=load_shift_fraction,
-        battery_capacity_mwh=battery_capacity_mwh,
-        battery_charge_limit_mw=battery_charge_limit_mw,
-        battery_discharge_limit_mw=battery_discharge_limit_mw,
-    )
-    for index, allocation in enumerate(allocations.to_dict(orient="records"), start=1):
+    worker_count = _normalize_workers(workers)
+    cache_guard = cache_locks_guard or threading.Lock()
+    energy_locks = energy_cache_locks if energy_cache_locks is not None else {}
+    wind_locks = wind_resource_cache_locks if wind_resource_cache_locks is not None else {}
+    required_locks = required_wind_cache_locks if required_wind_cache_locks is not None else {}
+    if scenario_configs is None:
+        scenario_configs = _scenario_configs(
+            cooling=cooling,
+            load_shift_fraction=load_shift_fraction,
+            battery_capacity_mwh=battery_capacity_mwh,
+            battery_charge_limit_mw=battery_charge_limit_mw,
+            battery_discharge_limit_mw=battery_discharge_limit_mw,
+        )
+    tasks: list[tuple[int, int, int, dict[str, object], dict[str, object], str]] = []
+    allocation_rows = allocations.to_dict(orient="records")
+    total_allocations = len(allocation_rows)
+    for allocation_index, allocation in enumerate(allocation_rows, start=1):
         for scenario_config in scenario_configs:
-            optimization_scenario = str(scenario_config["scenario"])
-            scenario_cooling = str(scenario_config["cooling_type"])
             for objective in objectives:
-                print(
-                    "Optimization "
-                    f"{index}/{total_rows}: {allocation['country']} / {allocation['growth_scenario']} / "
-                    f"{allocation['city']} / {allocation['scale']} / {optimization_scenario} / {objective}",
-                    flush=True,
+                tasks.append(
+                    (
+                        len(tasks),
+                        allocation_index,
+                        total_allocations,
+                        allocation,
+                        scenario_config,
+                        objective,
+                    )
                 )
-                row = _base_result_row(allocation)
-                row.update(
-                    {
-                        "objective": objective,
-                        "optimization_scenario": optimization_scenario,
-                        "optimization_scenario_label": OPTIMIZATION_SCENARIO_LABELS.get(
-                            optimization_scenario,
-                            optimization_scenario,
-                        ),
-                        "cooling_type": scenario_cooling,
-                        "load_shift_enabled": bool(scenario_config["load_shift_enabled"]),
-                        "battery_enabled": bool(scenario_config["battery_enabled"]),
-                        "configured_load_shift_fraction": float(scenario_config["load_shift_fraction"]),
-                    }
-                )
-                try:
-                    if int(allocation["facility_count"]) == 0:
-                        rows.append(_zero_optimization_row(row, hours))
-                        continue
-                    rated_it_power_kw = float(allocation["facility_capacity_mw"]) * 1000.0
-                    wind_capacity = _get_required_wind_capacity(
-                        cache=required_wind_cache,
-                        energy_cache=energy_cache,
-                        wind_resource_cache=wind_resource_cache,
-                        energy_calculator=energy_calculator,
-                        wind_calculator=wind_calculator,
-                        city=str(allocation["city"]),
-                        cooling_type=scenario_cooling,
-                        workload_file=workload_file,
-                        rated_it_power_kw=rated_it_power_kw,
-                        idle_power_fraction=idle_power_fraction,
-                        hours=hours,
-                        start_time=start_time,
-                        time_alignment=time_alignment,
-                        max_carbon_gap_hours=max_carbon_gap_hours,
-                        hub_height_m=hub_height_m,
-                        wind_loss_fraction=wind_loss_fraction,
-                        wind_cut_in=wind_cut_in,
-                        wind_rated=wind_rated,
-                        wind_cut_out=wind_cut_out,
-                    )
-                    result = optimizer(
-                        city=str(allocation["city"]),
-                        cooling=scenario_cooling,
-                        wind_capacity_mw=wind_capacity.required_wind_capacity_mw,
-                        wind_nc_file=wind_capacity.wind_nc_file,
-                        workload_file=workload_file,
-                        rated_it_power_kw=rated_it_power_kw,
-                        battery_capacity_mwh=scenario_config["battery_capacity_mwh"],
-                        battery_roundtrip_efficiency=battery_roundtrip_efficiency,
-                        grid_import_limit_mw=grid_import_limit_mw,
-                        battery_charge_limit_mw=scenario_config["battery_charge_limit_mw"],
-                        battery_discharge_limit_mw=scenario_config["battery_discharge_limit_mw"],
-                        load_shift_fraction=scenario_config["load_shift_fraction"],
-                        hours=hours,
-                        start_time=start_time,
-                        time_alignment=time_alignment,
-                        max_carbon_gap_hours=max_carbon_gap_hours,
-                        hub_height_m=hub_height_m,
-                        wind_loss_fraction=wind_loss_fraction,
-                        wind_cut_in=wind_cut_in,
-                        wind_rated=wind_rated,
-                        wind_cut_out=wind_cut_out,
-                        objective=objective,
-                        include_hourly=True,
-                        output_results=False,
-                    )
-                    rows.append(
-                        _optimization_result_row(
-                            row=row,
-                            wind_capacity=wind_capacity,
-                            result=result,
-                            facility_count=int(allocation["facility_count"]),
-                        )
-                    )
-                except Exception as exc:
-                    rows.append(_failed_row(row, str(exc)))
-    return pd.DataFrame(rows)
+
+    def run_task(
+        task: tuple[int, int, int, dict[str, object], dict[str, object], str],
+    ) -> tuple[int, dict[str, object]]:
+        sequence, allocation_index, total_allocations, allocation, scenario_config, objective = task
+        optimization_scenario = str(scenario_config["scenario"])
+        scenario_cooling = str(scenario_config["cooling_type"])
+        print(
+            "Optimization "
+            f"{sequence + 1}/{len(tasks)} "
+            f"(allocation {allocation_index}/{total_allocations}): "
+            f"{allocation['country']} / {allocation['growth_scenario']} / "
+            f"{allocation['city']} / {allocation['scale']} / {optimization_scenario} / {objective}",
+            flush=True,
+        )
+        row = _base_result_row(allocation)
+        row.update(
+            {
+                "objective": objective,
+                "optimization_scenario": optimization_scenario,
+                "optimization_scenario_label": OPTIMIZATION_SCENARIO_LABELS.get(
+                    optimization_scenario,
+                    optimization_scenario,
+                ),
+                "cooling_type": scenario_cooling,
+                "load_shift_enabled": bool(scenario_config["load_shift_enabled"]),
+                "battery_enabled": bool(scenario_config["battery_enabled"]),
+                "configured_load_shift_fraction": float(scenario_config["load_shift_fraction"]),
+            }
+        )
+        try:
+            if int(allocation["facility_count"]) == 0:
+                return sequence, _zero_optimization_row(row, hours)
+            rated_it_power_kw = float(allocation["facility_capacity_mw"]) * 1000.0
+            wind_capacity = _get_required_wind_capacity(
+                cache=required_wind_cache,
+                cache_locks=required_locks,
+                cache_locks_guard=cache_guard,
+                energy_cache=energy_cache,
+                wind_resource_cache=wind_resource_cache,
+                energy_cache_locks=energy_locks,
+                wind_resource_cache_locks=wind_locks,
+                energy_calculator=energy_calculator,
+                wind_calculator=wind_calculator,
+                city=str(allocation["city"]),
+                cooling_type=scenario_cooling,
+                workload_file=workload_file,
+                rated_it_power_kw=rated_it_power_kw,
+                idle_power_fraction=idle_power_fraction,
+                hours=hours,
+                start_time=start_time,
+                time_alignment=time_alignment,
+                max_carbon_gap_hours=max_carbon_gap_hours,
+                hub_height_m=hub_height_m,
+                wind_loss_fraction=wind_loss_fraction,
+                wind_cut_in=wind_cut_in,
+                wind_rated=wind_rated,
+                wind_cut_out=wind_cut_out,
+            )
+            result = optimizer(
+                city=str(allocation["city"]),
+                cooling=scenario_cooling,
+                wind_capacity_mw=wind_capacity.required_wind_capacity_mw,
+                wind_nc_file=wind_capacity.wind_nc_file,
+                workload_file=workload_file,
+                rated_it_power_kw=rated_it_power_kw,
+                battery_capacity_mwh=scenario_config["battery_capacity_mwh"],
+                battery_roundtrip_efficiency=battery_roundtrip_efficiency,
+                grid_import_limit_mw=grid_import_limit_mw,
+                battery_charge_limit_mw=scenario_config["battery_charge_limit_mw"],
+                battery_discharge_limit_mw=scenario_config["battery_discharge_limit_mw"],
+                load_shift_fraction=scenario_config["load_shift_fraction"],
+                hours=hours,
+                start_time=start_time,
+                time_alignment=time_alignment,
+                max_carbon_gap_hours=max_carbon_gap_hours,
+                hub_height_m=hub_height_m,
+                wind_loss_fraction=wind_loss_fraction,
+                wind_cut_in=wind_cut_in,
+                wind_rated=wind_rated,
+                wind_cut_out=wind_cut_out,
+                objective=objective,
+                include_hourly=True,
+                output_results=False,
+            )
+            return sequence, _optimization_result_row(
+                row=row,
+                wind_capacity=wind_capacity,
+                result=result,
+                facility_count=int(allocation["facility_count"]),
+            )
+        except Exception as exc:
+            return sequence, _failed_row(row, str(exc))
+
+    return pd.DataFrame(_run_parallel_tasks(tasks, run_task, worker_count))
+
+
+def _load_shift_scenario_configs(
+    *,
+    cooling: str,
+    load_shift_fraction: float,
+) -> tuple[dict[str, object], ...]:
+    return (
+        {
+            "scenario": "baseline",
+            "cooling_type": cooling,
+            "load_shift_enabled": False,
+            "battery_enabled": False,
+            "load_shift_fraction": 0.0,
+            "battery_capacity_mwh": 0.0,
+            "battery_charge_limit_mw": 0.0,
+            "battery_discharge_limit_mw": 0.0,
+        },
+        {
+            "scenario": "load_shift",
+            "cooling_type": cooling,
+            "load_shift_enabled": True,
+            "battery_enabled": False,
+            "load_shift_fraction": load_shift_fraction,
+            "battery_capacity_mwh": 0.0,
+            "battery_charge_limit_mw": 0.0,
+            "battery_discharge_limit_mw": 0.0,
+        },
+    )
 
 
 def append_scale_totals(
@@ -663,6 +1078,63 @@ def append_scale_totals(
         total_rows.append(total_row)
 
     return pd.concat([city_scale_results, pd.DataFrame(total_rows)], ignore_index=True, sort=False)
+
+
+def select_all_scale_results(results: pd.DataFrame) -> pd.DataFrame:
+    """Return only city or country rows representing the combined all-scale result."""
+    if results.empty or "scale" not in results:
+        return results.copy().reset_index(drop=True)
+    return results[results["scale"] == "all_scales"].copy().reset_index(drop=True)
+
+
+def build_cooling_comparison_results(results: pd.DataFrame) -> pd.DataFrame:
+    """Compare seawater cooling against the air-source baseline."""
+    if results.empty:
+        return pd.DataFrame()
+    group_columns = [
+        column
+        for column in ["country", "growth_scenario", "city", "scale"]
+        if column in results.columns
+    ]
+    return _build_pairwise_comparison_results(
+        results=results,
+        group_columns=group_columns,
+        compare_column="cooling_type",
+        baseline_value="air_source",
+        candidate_values=("seawater",),
+        metric_columns=COOLING_METRICS,
+        baseline_prefix="air_source",
+        candidate_prefix="seawater",
+        savings_suffix="vs_air_source",
+    )
+
+
+def build_optimization_comparison_results(results: pd.DataFrame) -> pd.DataFrame:
+    """Compare optimization scenarios against the seawater baseline scenario."""
+    if results.empty:
+        return pd.DataFrame()
+    group_columns = [
+        column
+        for column in ["country", "growth_scenario", "city", "objective", "cooling_type", "scale"]
+        if column in results.columns
+    ]
+    candidate_values = [
+        str(value)
+        for value in results["optimization_scenario"].dropna().unique()
+        if str(value) not in {"baseline", "baseline_air_source"}
+    ]
+    return _build_pairwise_comparison_results(
+        results=results,
+        group_columns=group_columns,
+        compare_column="optimization_scenario",
+        baseline_value="baseline",
+        candidate_values=tuple(sorted(candidate_values)),
+        metric_columns=OPTIMIZATION_RESULT_METRICS,
+        baseline_prefix="baseline",
+        candidate_prefix_column="optimization_scenario",
+        savings_suffix="vs_baseline",
+        label_column="optimization_scenario_label",
+    )
 
 
 def build_country_average_results(
@@ -703,9 +1175,157 @@ def build_country_average_results(
     return pd.DataFrame(rows)
 
 
+def _run_parallel_tasks(
+    tasks: list[object],
+    run_task: Callable[[object], tuple[int, dict[str, object]]],
+    workers: int,
+) -> list[dict[str, object]]:
+    if not tasks:
+        return []
+    if workers <= 1:
+        completed = [run_task(task) for task in tasks]
+    else:
+        completed = []
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            futures = [executor.submit(run_task, task) for task in tasks]
+            for future in as_completed(futures):
+                completed.append(future.result())
+    return [row for _, row in sorted(completed, key=lambda item: item[0])]
+
+
+def _build_pairwise_comparison_results(
+    *,
+    results: pd.DataFrame,
+    group_columns: list[str],
+    compare_column: str,
+    baseline_value: str,
+    candidate_values: tuple[str, ...],
+    metric_columns: list[str],
+    baseline_prefix: str,
+    savings_suffix: str,
+    candidate_prefix: str | None = None,
+    candidate_prefix_column: str | None = None,
+    label_column: str | None = None,
+) -> pd.DataFrame:
+    if compare_column not in results.columns:
+        return pd.DataFrame()
+    rows: list[dict[str, object]] = []
+    for _, group in results.groupby(group_columns, dropna=False, sort=True):
+        baseline = _first_matching_row(group, compare_column, baseline_value)
+        for candidate_value in candidate_values:
+            candidate = _first_matching_row(group, compare_column, candidate_value)
+            if baseline is None and candidate is None:
+                continue
+            source = candidate if candidate is not None else baseline
+            assert source is not None
+            row = _comparison_metadata(source, group_columns)
+            metric_candidate_prefix = (
+                "comparison"
+                if candidate_prefix_column is not None
+                else str(candidate_prefix or candidate_value)
+            )
+            row.update(
+                {
+                    "comparison": f"{candidate_value}_vs_{baseline_value}",
+                    f"baseline_{compare_column}": baseline_value,
+                    f"comparison_{compare_column}": candidate_value,
+                    "baseline_status": _row_value(baseline, "status", "missing"),
+                    "comparison_status": _row_value(candidate, "status", "missing"),
+                    "status": _comparison_status(baseline, candidate),
+                    "error_message": _comparison_error_message(baseline, candidate),
+                }
+            )
+            if label_column:
+                row[f"comparison_{label_column}"] = _row_value(candidate, label_column, candidate_value)
+            for metadata_column in _COMPARISON_METADATA_COLUMNS:
+                if metadata_column in source.index and metadata_column not in row:
+                    row[metadata_column] = source[metadata_column]
+            for metric in metric_columns:
+                baseline_metric = _row_numeric_value(baseline, metric)
+                candidate_metric = _row_numeric_value(candidate, metric)
+                savings = baseline_metric - candidate_metric
+                row[f"{baseline_prefix}_{metric}"] = baseline_metric
+                row[f"{metric_candidate_prefix}_{metric}"] = candidate_metric
+                row[f"{metric}_savings_{savings_suffix}"] = savings
+                row[f"{metric}_savings_pct_{savings_suffix}"] = _pct_savings(savings, baseline_metric)
+            rows.append(row)
+    return pd.DataFrame(rows)
+
+
+_COMPARISON_METADATA_COLUMNS = [
+    "representative_city_count",
+    "city_count_in_country",
+    "country_growth_mw",
+    "city_growth_mw",
+    "average_city_growth_mw",
+    "scale",
+    "scale_share",
+    "scale_capacity_mw",
+    "average_scale_capacity_mw",
+    "facility_count",
+    "average_facility_count",
+    "below_scale_min",
+    "below_scale_min_city_count",
+]
+
+
+def _first_matching_row(group: pd.DataFrame, column: str, value: str) -> pd.Series | None:
+    matches = group[group[column].astype(str) == value]
+    if matches.empty:
+        return None
+    return matches.iloc[0]
+
+
+def _comparison_metadata(source: pd.Series, group_columns: list[str]) -> dict[str, object]:
+    return {column: source[column] for column in group_columns if column in source.index}
+
+
+def _row_value(row: pd.Series | None, column: str, default: object = math.nan) -> object:
+    if row is None or column not in row.index:
+        return default
+    return row[column]
+
+
+def _row_numeric_value(row: pd.Series | None, column: str) -> float:
+    if row is None or column not in row.index:
+        return math.nan
+    try:
+        return float(row[column])
+    except Exception:
+        return math.nan
+
+
+def _comparison_status(baseline: pd.Series | None, candidate: pd.Series | None) -> str:
+    if baseline is None or candidate is None:
+        return "failed"
+    statuses = {str(_row_value(baseline, "status", "")), str(_row_value(candidate, "status", ""))}
+    return "ok" if statuses == {"ok"} else "failed"
+
+
+def _comparison_error_message(baseline: pd.Series | None, candidate: pd.Series | None) -> str:
+    errors: list[str] = []
+    if baseline is None:
+        errors.append("Missing baseline row")
+    if candidate is None:
+        errors.append("Missing comparison row")
+    for label, row in (("baseline", baseline), ("comparison", candidate)):
+        message = str(_row_value(row, "error_message", "") or "").strip()
+        if message:
+            errors.append(f"{label}: {message}")
+    return "; ".join(errors)
+
+
+def _pct_savings(savings: float, baseline: float) -> float:
+    if not math.isfinite(savings) or not math.isfinite(baseline) or math.isclose(baseline, 0.0):
+        return math.nan
+    return savings / baseline * 100.0
+
+
 def _get_energy_result(
     *,
     cache: dict[tuple[object, ...], DataCenterEnergyResult],
+    cache_locks: dict[tuple[object, ...], threading.Lock] | None = None,
+    cache_locks_guard: threading.Lock | None = None,
     energy_calculator: EnergyCalculator,
     city: str,
     cooling_type: str,
@@ -729,24 +1349,29 @@ def _get_energy_result(
         max_carbon_gap_hours,
     )
     if key not in cache:
-        cache[key] = energy_calculator(
-            city=city,
-            cooling_type=cooling_type,
-            workload_file=workload_file,
-            rated_it_power_kw=rated_it_power_kw,
-            idle_power_fraction=idle_power_fraction,
-            hours=hours,
-            start_time=start_time,
-            time_alignment=time_alignment,
-            max_carbon_gap_hours=max_carbon_gap_hours,
-            progress=False,
-        )
+        lock = _cache_key_lock(cache_locks, cache_locks_guard, key)
+        with lock:
+            if key not in cache:
+                cache[key] = energy_calculator(
+                    city=city,
+                    cooling_type=cooling_type,
+                    workload_file=workload_file,
+                    rated_it_power_kw=rated_it_power_kw,
+                    idle_power_fraction=idle_power_fraction,
+                    hours=hours,
+                    start_time=start_time,
+                    time_alignment=time_alignment,
+                    max_carbon_gap_hours=max_carbon_gap_hours,
+                    progress=False,
+                )
     return cache[key]
 
 
 def _get_wind_resource(
     *,
     cache: dict[tuple[object, ...], WindResourceResult],
+    cache_locks: dict[tuple[object, ...], threading.Lock] | None = None,
+    cache_locks_guard: threading.Lock | None = None,
     wind_calculator: WindCalculator,
     city: str,
     hub_height_m: float,
@@ -764,22 +1389,29 @@ def _get_wind_resource(
         round(float(cut_out), 9),
     )
     if key not in cache:
-        cache[key] = wind_calculator(
-            city=city,
-            hub_height_m=hub_height_m,
-            loss_fraction=loss_fraction,
-            cut_in=cut_in,
-            rated=rated,
-            cut_out=cut_out,
-        )
+        lock = _cache_key_lock(cache_locks, cache_locks_guard, key)
+        with lock:
+            if key not in cache:
+                cache[key] = wind_calculator(
+                    city=city,
+                    hub_height_m=hub_height_m,
+                    loss_fraction=loss_fraction,
+                    cut_in=cut_in,
+                    rated=rated,
+                    cut_out=cut_out,
+                )
     return cache[key]
 
 
 def _get_required_wind_capacity(
     *,
     cache: dict[tuple[object, ...], RequiredWindCapacity],
+    cache_locks: dict[tuple[object, ...], threading.Lock] | None = None,
+    cache_locks_guard: threading.Lock | None = None,
     energy_cache: dict[tuple[object, ...], DataCenterEnergyResult],
     wind_resource_cache: dict[tuple[object, ...], WindResourceResult],
+    energy_cache_locks: dict[tuple[object, ...], threading.Lock] | None = None,
+    wind_resource_cache_locks: dict[tuple[object, ...], threading.Lock] | None = None,
     energy_calculator: EnergyCalculator,
     wind_calculator: WindCalculator,
     city: str,
@@ -812,46 +1444,89 @@ def _get_required_wind_capacity(
         round(float(wind_cut_out), 9),
     )
     if key not in cache:
-        energy = _get_energy_result(
-            cache=energy_cache,
-            energy_calculator=energy_calculator,
-            city=city,
-            cooling_type=cooling_type,
-            workload_file=workload_file,
-            rated_it_power_kw=rated_it_power_kw,
-            idle_power_fraction=idle_power_fraction,
-            hours=hours,
-            start_time=start_time,
-            time_alignment=time_alignment,
-            max_carbon_gap_hours=max_carbon_gap_hours,
-        )
-        wind_resource = _get_wind_resource(
-            cache=wind_resource_cache,
-            wind_calculator=wind_calculator,
-            city=city,
-            hub_height_m=hub_height_m,
-            loss_fraction=wind_loss_fraction,
-            cut_in=wind_cut_in,
-            rated=wind_rated,
-            cut_out=wind_cut_out,
-        )
-        datacenter_total_energy_mwh = energy.total_energy_kwh / 1000.0
-        required_wind_capacity_mw = datacenter_total_energy_mwh / wind_resource.wind_generation_per_mw_mwh
-        cache[key] = RequiredWindCapacity(
-            city=city,
-            cooling_type=cooling_type,
-            rated_it_power_kw=float(rated_it_power_kw),
-            hours=energy.hours,
-            datacenter_total_energy_mwh=datacenter_total_energy_mwh,
-            required_wind_capacity_mw=required_wind_capacity_mw,
-            wind_generation_per_mw_mwh=wind_resource.wind_generation_per_mw_mwh,
-            mean_net_capacity_factor=wind_resource.mean_net_capacity_factor,
-            point_id=wind_resource.point_id,
-            wind_nc_file=wind_resource.wind_nc_file,
-            wind_start_time=wind_resource.wind_start_time,
-            wind_end_time=wind_resource.wind_end_time,
-        )
+        lock = _cache_key_lock(cache_locks, cache_locks_guard, key)
+        with lock:
+            if key not in cache:
+                energy = _get_energy_result(
+                    cache=energy_cache,
+                    cache_locks=energy_cache_locks,
+                    cache_locks_guard=cache_locks_guard,
+                    energy_calculator=energy_calculator,
+                    city=city,
+                    cooling_type=cooling_type,
+                    workload_file=workload_file,
+                    rated_it_power_kw=rated_it_power_kw,
+                    idle_power_fraction=idle_power_fraction,
+                    hours=hours,
+                    start_time=start_time,
+                    time_alignment=time_alignment,
+                    max_carbon_gap_hours=max_carbon_gap_hours,
+                )
+                wind_resource = _get_wind_resource(
+                    cache=wind_resource_cache,
+                    cache_locks=wind_resource_cache_locks,
+                    cache_locks_guard=cache_locks_guard,
+                    wind_calculator=wind_calculator,
+                    city=city,
+                    hub_height_m=hub_height_m,
+                    loss_fraction=wind_loss_fraction,
+                    cut_in=wind_cut_in,
+                    rated=wind_rated,
+                    cut_out=wind_cut_out,
+                )
+                datacenter_total_energy_mwh = energy.total_energy_kwh / 1000.0
+                required_wind_capacity_mw = datacenter_total_energy_mwh / wind_resource.wind_generation_per_mw_mwh
+                cache[key] = RequiredWindCapacity(
+                    city=city,
+                    cooling_type=cooling_type,
+                    rated_it_power_kw=float(rated_it_power_kw),
+                    hours=energy.hours,
+                    datacenter_total_energy_mwh=datacenter_total_energy_mwh,
+                    required_wind_capacity_mw=required_wind_capacity_mw,
+                    wind_generation_per_mw_mwh=wind_resource.wind_generation_per_mw_mwh,
+                    mean_net_capacity_factor=wind_resource.mean_net_capacity_factor,
+                    point_id=wind_resource.point_id,
+                    wind_nc_file=wind_resource.wind_nc_file,
+                    wind_start_time=wind_resource.wind_start_time,
+                    wind_end_time=wind_resource.wind_end_time,
+                )
     return cache[key]
+
+
+def _cache_key_lock(
+    cache_locks: dict[tuple[object, ...], threading.Lock] | None,
+    cache_locks_guard: threading.Lock | None,
+    key: tuple[object, ...],
+) -> threading.Lock:
+    if cache_locks is None:
+        return threading.Lock()
+    guard = cache_locks_guard or threading.Lock()
+    with guard:
+        if key not in cache_locks:
+            cache_locks[key] = threading.Lock()
+        return cache_locks[key]
+
+
+def _normalize_workers(workers: int) -> int:
+    worker_count = int(workers)
+    if worker_count <= 0:
+        raise ValueError("workers must be a positive integer.")
+    return worker_count
+
+
+def _normalize_mode(mode: str) -> str:
+    normalized = str(mode).strip().lower().replace("_", "-")
+    aliases = {
+        "all": "all",
+        "cooling": "cooling",
+        "heat-pump": "cooling",
+        "load-shift": "load-shift",
+        "loadshift": "load-shift",
+        "optimization": "load-shift",
+    }
+    if normalized not in aliases:
+        raise ValueError("mode must be one of: all, cooling, load-shift.")
+    return aliases[normalized]
 
 
 def _cooling_result_row(
@@ -1208,7 +1883,7 @@ def _hours_token(hours: int | None) -> str:
     return "all_hours" if hours is None else f"{hours}h"
 
 
-def main(argv: list[str] | None = None) -> None:
+def _build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Allocate country 2030 growth to representative cities and compare cooling/optimization scenarios."
     )
@@ -1216,6 +1891,17 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR))
     parser.add_argument("--include-not-ready", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument(
+        "--mode",
+        choices=["all", "cooling", "load-shift"],
+        default="all",
+        help="Run cooling comparison, load-shift optimization, or both.",
+    )
+    parser.add_argument(
+        "--write-debug-scale-results",
+        action="store_true",
+        help="Write scale-level cooling and optimization debug CSVs in addition to all-scale paper outputs.",
+    )
     parser.add_argument("--workload-file", default=str(WORKLOAD_FILE))
     parser.add_argument("--idle-power-fraction", type=float, default=0.3)
     parser.add_argument("--hours", type=int, default=8760)
@@ -1235,35 +1921,96 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--wind-cut-in", type=float, default=3.0)
     parser.add_argument("--wind-rated", type=float, default=12.0)
     parser.add_argument("--wind-cut-out", type=float, default=25.0)
-    args = parser.parse_args(argv)
-
-    output_files = run_country_growth_allocation(
-        manifest_file=args.manifest_file,
-        output_dir=args.output_dir,
-        include_not_ready=args.include_not_ready,
-        dry_run=args.dry_run,
-        workload_file=args.workload_file,
-        idle_power_fraction=args.idle_power_fraction,
-        hours=args.hours,
-        start_time=args.start_time,
-        time_alignment=args.time_alignment,
-        max_carbon_gap_hours=args.max_carbon_gap_hours,
-        cooling=args.cooling,
-        objectives=tuple(args.objectives),
-        battery_capacity_mwh=args.battery_capacity_mwh,
-        battery_roundtrip_efficiency=args.battery_roundtrip_efficiency,
-        grid_import_limit_mw=args.grid_import_limit_mw,
-        battery_charge_limit_mw=args.battery_charge_limit_mw,
-        battery_discharge_limit_mw=args.battery_discharge_limit_mw,
-        load_shift_fraction=args.load_shift_fraction,
-        hub_height_m=args.hub_height_m,
-        wind_loss_fraction=args.wind_loss_fraction,
-        wind_cut_in=args.wind_cut_in,
-        wind_rated=args.wind_rated,
-        wind_cut_out=args.wind_cut_out,
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=1,
+        help="Number of worker threads for cooling and optimization calculations. Default 1 keeps serial behavior.",
     )
-    print({key: str(path) for key, path in output_files.items()})
+    return parser
 
 
 if __name__ == "__main__":
-    main(sys.argv[1:])
+    args = _build_arg_parser().parse_args(sys.argv[1:])
+    args.mode = 'cooling'
+    mode = _normalize_mode(args.mode)
+
+    if args.dry_run:
+        output_files = run_country_growth_allocation(
+            manifest_file=args.manifest_file,
+            output_dir=args.output_dir,
+            include_not_ready=args.include_not_ready,
+            dry_run=True,
+            mode=mode,
+            workload_file=args.workload_file,
+            idle_power_fraction=args.idle_power_fraction,
+            hours=args.hours,
+            start_time=args.start_time,
+            time_alignment=args.time_alignment,
+            max_carbon_gap_hours=args.max_carbon_gap_hours,
+            cooling=args.cooling,
+            objectives=tuple(args.objectives),
+            battery_capacity_mwh=args.battery_capacity_mwh,
+            battery_roundtrip_efficiency=args.battery_roundtrip_efficiency,
+            grid_import_limit_mw=args.grid_import_limit_mw,
+            battery_charge_limit_mw=args.battery_charge_limit_mw,
+            battery_discharge_limit_mw=args.battery_discharge_limit_mw,
+            load_shift_fraction=args.load_shift_fraction,
+            hub_height_m=args.hub_height_m,
+            wind_loss_fraction=args.wind_loss_fraction,
+            wind_cut_in=args.wind_cut_in,
+            wind_rated=args.wind_rated,
+            wind_cut_out=args.wind_cut_out,
+            workers=args.workers,
+            write_debug_scale_results=args.write_debug_scale_results,
+        )
+    else:
+        output_files: dict[str, Path] = {}
+        if mode in {"all", "cooling"}:
+            output_files.update(
+                run_country_growth_cooling_comparison(
+                    manifest_file=args.manifest_file,
+                    output_dir=args.output_dir,
+                    include_not_ready=args.include_not_ready,
+                    workload_file=args.workload_file,
+                    idle_power_fraction=args.idle_power_fraction,
+                    hours=args.hours,
+                    start_time=args.start_time,
+                    time_alignment=args.time_alignment,
+                    max_carbon_gap_hours=args.max_carbon_gap_hours,
+                    hub_height_m=args.hub_height_m,
+                    wind_loss_fraction=args.wind_loss_fraction,
+                    wind_cut_in=args.wind_cut_in,
+                    wind_rated=args.wind_rated,
+                    wind_cut_out=args.wind_cut_out,
+                    workers=args.workers,
+                    write_debug_scale_results=args.write_debug_scale_results,
+                )
+            )
+        if mode in {"all", "load-shift"}:
+            output_files.update(
+                run_country_growth_load_shift_optimization(
+                    manifest_file=args.manifest_file,
+                    output_dir=args.output_dir,
+                    include_not_ready=args.include_not_ready,
+                    cooling=args.cooling,
+                    objectives=tuple(args.objectives),
+                    workload_file=args.workload_file,
+                    idle_power_fraction=args.idle_power_fraction,
+                    hours=args.hours,
+                    start_time=args.start_time,
+                    time_alignment=args.time_alignment,
+                    max_carbon_gap_hours=args.max_carbon_gap_hours,
+                    battery_roundtrip_efficiency=args.battery_roundtrip_efficiency,
+                    grid_import_limit_mw=args.grid_import_limit_mw,
+                    load_shift_fraction=args.load_shift_fraction,
+                    hub_height_m=args.hub_height_m,
+                    wind_loss_fraction=args.wind_loss_fraction,
+                    wind_cut_in=args.wind_cut_in,
+                    wind_rated=args.wind_rated,
+                    wind_cut_out=args.wind_cut_out,
+                    workers=args.workers,
+                    write_debug_scale_results=args.write_debug_scale_results,
+                )
+            )
+    print({key: str(path) for key, path in output_files.items()})

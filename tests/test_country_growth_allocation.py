@@ -1,15 +1,25 @@
 from pathlib import Path
+from types import SimpleNamespace
+import threading
+import time
 
 import pandas as pd
 import pytest
 
 from scripts.run_country_growth_allocation import (
+    append_scale_totals,
     build_city_scale_allocations,
+    build_cooling_comparison_results,
     build_country_average_results,
     build_country_growths,
+    build_optimization_comparison_results,
     choose_facility_count,
     load_scale_definitions,
+    run_cooling_comparisons,
+    run_country_growth_cooling_comparison,
     run_country_growth_allocation,
+    run_country_growth_load_shift_optimization,
+    select_all_scale_results,
 )
 
 
@@ -59,6 +69,62 @@ def test_country_results_average_city_results_instead_of_summing():
 
     assert country.iloc[0]["representative_city_count"] == 2
     assert country.iloc[0]["total_energy_kwh"] == pytest.approx(20.0)
+
+
+def test_paper_city_results_keep_only_all_scale_totals():
+    scale_results = pd.DataFrame(
+        [
+            _scale_result("small", "air_source", 10.0),
+            _scale_result("medium", "air_source", 30.0),
+            _scale_result("large", "air_source", 60.0),
+        ]
+    )
+
+    with_totals = append_scale_totals(
+        scale_results,
+        metric_columns=["total_energy_kwh"],
+        extra_group_columns=["cooling_type"],
+    )
+    paper_results = select_all_scale_results(with_totals)
+
+    assert paper_results["scale"].tolist() == ["all_scales"]
+    assert paper_results.iloc[0]["total_energy_kwh"] == pytest.approx(100.0)
+
+
+def test_cooling_comparison_uses_air_source_as_baseline():
+    results = pd.DataFrame(
+        [
+            _city_result("A City", 100.0, cooling_type="air_source"),
+            _city_result("A City", 70.0, cooling_type="seawater"),
+        ]
+    )
+
+    comparison = build_cooling_comparison_results(results)
+
+    assert comparison.iloc[0]["air_source_total_energy_kwh"] == pytest.approx(100.0)
+    assert comparison.iloc[0]["seawater_total_energy_kwh"] == pytest.approx(70.0)
+    assert comparison.iloc[0]["total_energy_kwh_savings_vs_air_source"] == pytest.approx(30.0)
+    assert comparison.iloc[0]["total_energy_kwh_savings_pct_vs_air_source"] == pytest.approx(30.0)
+
+
+def test_optimization_comparison_uses_baseline_scenario_as_baseline():
+    results = pd.DataFrame(
+        [
+            _optimization_result("baseline", 100.0),
+            _optimization_result("load_shift", 75.0),
+            _optimization_result("load_shift_battery", 60.0),
+            _optimization_result("baseline_air_source", 130.0, cooling_type="air_source"),
+        ]
+    )
+
+    comparison = build_optimization_comparison_results(results)
+
+    scenarios = set(comparison["comparison_optimization_scenario"])
+    assert scenarios == {"load_shift", "load_shift_battery"}
+    load_shift = comparison[comparison["comparison_optimization_scenario"] == "load_shift"].iloc[0]
+    assert load_shift["baseline_grid_purchase_mwh"] == pytest.approx(100.0)
+    assert load_shift["comparison_grid_purchase_mwh"] == pytest.approx(75.0)
+    assert load_shift["grid_purchase_mwh_savings_vs_baseline"] == pytest.approx(25.0)
 
 
 def test_scale_allocation_preserves_city_capacity():
@@ -114,6 +180,104 @@ def test_dry_run_writes_growth_and_allocation_csvs_without_energy_model(tmp_path
     assert pd.read_csv(output_files["city_scale_allocations_csv"]).shape[0] == 24
 
 
+def test_parallel_cooling_uses_thread_safe_cache_for_duplicate_tasks():
+    allocation = _scale_result("small", "air_source", total_energy_kwh=10.0)
+    allocation["facility_count"] = 1
+    allocation["facility_capacity_mw"] = 5.0
+    allocations = pd.DataFrame([allocation, dict(allocation)])
+    energy_calls: list[tuple[object, ...]] = []
+    wind_calls: list[str] = []
+    counter_lock = threading.Lock()
+
+    def fake_energy(**kwargs):
+        key = (kwargs["city"], kwargs["cooling_type"], kwargs["rated_it_power_kw"])
+        time.sleep(0.01)
+        with counter_lock:
+            energy_calls.append(key)
+        return _fake_energy_result(kwargs["cooling_type"], kwargs["rated_it_power_kw"])
+
+    def fake_wind(**kwargs):
+        time.sleep(0.01)
+        with counter_lock:
+            wind_calls.append(kwargs["city"])
+        return _fake_wind_result()
+
+    results = run_cooling_comparisons(
+        allocations=allocations,
+        workload_file="workload.csv",
+        idle_power_fraction=0.3,
+        hours=24,
+        start_time="2025-01-01 00:00",
+        time_alignment="start_time",
+        max_carbon_gap_hours=6,
+        hub_height_m=150.0,
+        wind_loss_fraction=0.15,
+        wind_cut_in=3.0,
+        wind_rated=12.0,
+        wind_cut_out=25.0,
+        energy_cache={},
+        wind_resource_cache={},
+        energy_cache_locks={},
+        wind_resource_cache_locks={},
+        cache_locks_guard=threading.Lock(),
+        energy_calculator=fake_energy,
+        wind_calculator=fake_wind,
+        workers=4,
+    )
+
+    assert len(results) == 4
+    assert len(energy_calls) == 2
+    assert set(key[1] for key in energy_calls) == {"air_source", "seawater"}
+    assert len(wind_calls) == 1
+
+
+def test_cooling_main_function_writes_city_and_country_summaries(tmp_path: Path):
+    output_files = run_country_growth_cooling_comparison(
+        output_dir=tmp_path,
+        country_rows=_country_rows(country_growth_mw=100.0),
+        city_rows=_city_rows(),
+        scale_rows=_scale_rows(),
+        energy_calculator=lambda **kwargs: _fake_energy_result(
+            kwargs["cooling_type"],
+            kwargs["rated_it_power_kw"],
+        ),
+        wind_calculator=lambda **kwargs: _fake_wind_result(),
+        hours=24,
+        workers=2,
+    )
+
+    assert output_files["cooling_city_summary_csv"].exists()
+    assert output_files["cooling_country_summary_csv"].exists()
+    city_summary = pd.read_csv(output_files["cooling_city_summary_csv"])
+    assert set(city_summary["scale"]) == {"all_scales"}
+    assert "total_energy_kwh_savings_vs_air_source" in city_summary.columns
+
+
+def test_load_shift_main_function_excludes_battery_scenario(tmp_path: Path):
+    output_files = run_country_growth_load_shift_optimization(
+        output_dir=tmp_path,
+        country_rows=_country_rows(country_growth_mw=100.0),
+        city_rows=_city_rows(),
+        scale_rows=_scale_rows(),
+        energy_calculator=lambda **kwargs: _fake_energy_result(
+            kwargs["cooling_type"],
+            kwargs["rated_it_power_kw"],
+        ),
+        wind_calculator=lambda **kwargs: _fake_wind_result(),
+        optimizer=_fake_optimizer,
+        objectives=("min-grid-mwh",),
+        hours=24,
+        workers=2,
+    )
+
+    assert output_files["load_shift_city_summary_csv"].exists()
+    assert output_files["load_shift_country_summary_csv"].exists()
+    city_summary = pd.read_csv(output_files["load_shift_city_summary_csv"])
+    assert set(city_summary["comparison_optimization_scenario"]) == {"load_shift"}
+    assert "load_shift_battery" not in set(city_summary["comparison_optimization_scenario"])
+    assert "grid_purchase_mwh_savings_vs_baseline" in city_summary.columns
+
+
 def _sample_allocations(country_growth_mw: float) -> pd.DataFrame:
     growths = build_country_growths(_country_rows(country_growth_mw=country_growth_mw))
     scales = load_scale_definitions(_scale_rows())
@@ -156,7 +320,7 @@ def _scale_rows() -> list[dict[str, object]]:
     ]
 
 
-def _city_result(city: str, total_energy_kwh: float) -> dict[str, object]:
+def _city_result(city: str, total_energy_kwh: float, cooling_type: str = "seawater") -> dict[str, object]:
     return {
         "country": "Country",
         "growth_scenario": "Base",
@@ -170,8 +334,83 @@ def _city_result(city: str, total_energy_kwh: float) -> dict[str, object]:
         "facility_count": 1,
         "facility_capacity_mw": 100.0,
         "below_scale_min": False,
-        "cooling_type": "seawater",
+        "cooling_type": cooling_type,
         "status": "ok",
         "error_message": "",
         "total_energy_kwh": total_energy_kwh,
+    }
+
+
+def _scale_result(scale: str, cooling_type: str, total_energy_kwh: float) -> dict[str, object]:
+    row = _city_result("A City", total_energy_kwh, cooling_type=cooling_type)
+    row["scale"] = scale
+    row["scale_share"] = {"small": 0.2, "medium": 0.3, "large": 0.5}[scale]
+    row["scale_capacity_mw"] = row["scale_share"] * 100.0
+    return row
+
+
+def _optimization_result(
+    scenario: str,
+    grid_purchase_mwh: float,
+    cooling_type: str = "seawater",
+) -> dict[str, object]:
+    row = _city_result("A City", total_energy_kwh=1000.0, cooling_type=cooling_type)
+    row.update(
+        {
+            "objective": "min-grid-mwh",
+            "optimization_scenario": scenario,
+            "optimization_scenario_label": scenario,
+            "grid_purchase_mwh": grid_purchase_mwh,
+        }
+    )
+    return row
+
+
+def _fake_energy_result(cooling_type: str, rated_it_power_kw: float) -> SimpleNamespace:
+    return SimpleNamespace(
+        cooling_type=cooling_type,
+        hours=24,
+        simulation_start_time="2025-01-01 00:00:00",
+        simulation_end_time="2025-01-01 23:00:00",
+        time_alignment="start_time",
+        rated_it_power_kw=rated_it_power_kw,
+        it_energy_kwh=10.0,
+        it_carbon_emissions_kgco2=1.0,
+        cooling_energy_kwh=2.0,
+        cooling_carbon_emissions_kgco2=0.2,
+        total_energy_kwh=12.0,
+        carbon_emissions_kgco2=1.2,
+    )
+
+
+def _fake_wind_result() -> SimpleNamespace:
+    return SimpleNamespace(
+        wind_generation_per_mw_mwh=100.0,
+        mean_net_capacity_factor=0.4,
+        point_id="point",
+        wind_nc_file="wind.nc",
+        wind_start_time="2025-01-01 00:00:00",
+        wind_end_time="2025-12-31 23:00:00",
+    )
+
+
+def _fake_optimizer(**kwargs) -> dict[str, object]:
+    grid_purchase = 80.0 if float(kwargs["load_shift_fraction"]) > 0 else 100.0
+    return {
+        "annual_demand_mwh": 120.0,
+        "annual_wind_mwh": 120.0,
+        "grid_purchase_mwh": grid_purchase,
+        "grid_purchase_co2_kg": grid_purchase * 10.0,
+        "wind_curtailment_mwh": 5.0,
+        "battery_charge_mwh": 0.0,
+        "battery_discharge_mwh": 0.0,
+        "battery_conversion_loss_mwh": 0.0,
+        "shifted_down_mwh": 20.0 if float(kwargs["load_shift_fraction"]) > 0 else 0.0,
+        "shifted_up_mwh": 20.0 if float(kwargs["load_shift_fraction"]) > 0 else 0.0,
+        "hours_with_grid_purchase": 10.0,
+        "hours_with_curtailment": 2.0,
+        "max_hourly_grid_purchase_mw": 3.0,
+        "max_hourly_wind_curtailment_mw": 1.0,
+        "max_hourly_battery_charge_mw": 0.0,
+        "max_hourly_battery_discharge_mw": 0.0,
     }

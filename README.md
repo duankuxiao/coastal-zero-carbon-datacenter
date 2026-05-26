@@ -185,7 +185,12 @@ python -m scripts.run_load_shift_and_battery_optimization
 新增入口 `scripts/run_country_growth_allocation.py` 用于按国家 2030 情景新增容量，生成代表城市和数据中心规模分配，并批量比较两类效果：
 
 - 空气源热泵 vs 海水源热泵冷却系统；
-- 海水源基线、负荷迁移、负荷迁移 + 蓄电池等优化手段。
+- 实际容量条件下的风机容量需求与负荷迁移优化效果，当前主结果暂不考虑蓄电池。
+- 命令行入口按 `--mode` 直接调度 `run_country_growth_cooling_comparison(...)` 和 `run_country_growth_load_shift_optimization(...)`；`--mode all` 会依次运行两类汇总。
+- `city_scale_allocations.csv` 保留 small / medium / large 的分配明细；城市和国家层面的主结果均为三种规模合并后的 `all_scales` 结果。
+- 冷却系统对比以 `air_source` 为 baseline，`seawater` 为对比方案；负荷迁移优化以 `optimization_scenario == baseline` 为 baseline。
+- 负荷迁移主结果仅包含 `baseline` 和 `load_shift`，不包含蓄电池场景。
+- 国家结果不是城市求和，而是该国家所有代表城市整体结果的算术平均，并保留 `representative_city_count`。
 
 先运行 dry-run 可只检查容量增长和规模分配，不调用能耗、风电或优化模型：
 
@@ -201,7 +206,24 @@ python -m scripts.run_country_growth_allocation ^
 python -m scripts.run_country_growth_allocation ^
   --hours 8760 ^
   --start-time "2025-01-01 00:00" ^
+  --mode all ^
+  --workers 4 ^
   --output-dir results/country_growth_allocation
+```
+
+`--workers` 控制冷却和优化计算的线程数，默认 `1` 保持串行行为。建议先用 2 到 4 个线程试跑；如果优化求解器或机器内存成为瓶颈，可以降回 `--workers 1`。
+`--mode cooling` 只运行空气源/海水源热泵对比；`--mode load-shift` 只运行风机容量需求与负荷迁移优化；`--mode all` 依次运行两类汇总。
+
+Python 中也可以直接调用两个主函数：
+
+```python
+from scripts.run_country_growth_allocation import (
+    run_country_growth_cooling_comparison,
+    run_country_growth_load_shift_optimization,
+)
+
+run_country_growth_cooling_comparison(output_dir="results/country_growth_cooling")
+run_country_growth_load_shift_optimization(output_dir="results/country_growth_load_shift")
 ```
 
 默认读取 `data/coastal_datacenter_city_manifest.xlsx` 中的三个 sheet：
@@ -214,10 +236,11 @@ python -m scripts.run_country_growth_allocation ^
 
 - `country_growths.csv`：国家在四种 2030 情景下的新增容量。
 - `city_scale_allocations.csv`：每个 country × scenario × city × small/medium/large 的容量、设施数量和单体容量。
-- `country_growth_cooling_city_results_<hours>.csv`：四种情景下城市级冷却系统对比结果。
-- `country_growth_optimization_city_results_<hours>.csv`：四种情景下城市级优化效果结果。
-- `country_growth_cooling_country_results_<hours>.csv`：国家级冷却系统对比结果，按代表城市算术平均。
-- `country_growth_optimization_country_results_<hours>.csv`：国家级优化效果结果，按代表城市算术平均。
+- `country_growth_cooling_city_summary_<hours>.csv`：四种情景下城市级 `all_scales` 海水源相对空气源热泵的提升效果。
+- `country_growth_cooling_country_summary_<hours>.csv`：国家级 `all_scales` 海水源相对空气源热泵的提升效果，按代表城市算术平均。
+- `country_growth_load_shift_city_summary_<hours>.csv`：城市级风机容量需求和负荷迁移相对 baseline 的优化效果。
+- `country_growth_load_shift_country_summary_<hours>.csv`：国家级风机容量需求和负荷迁移相对 baseline 的优化效果，按代表城市算术平均。
+- 加 `--write-debug-scale-results` 时额外输出 `country_growth_cooling_scale_debug_<hours>.csv` 和 `country_growth_load_shift_scale_debug_<hours>.csv`，用于检查 small / medium / large 的中间计算。
 
 单城市优化也可以在 Python 中直接调用：
 
