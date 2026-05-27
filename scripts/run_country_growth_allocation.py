@@ -125,7 +125,7 @@ def run_country_growth_allocation(
     time_alignment: str | None = None,
     max_carbon_gap_hours: int = 6,
     cooling: str = "seawater",
-    objectives: Iterable[str] = ("min-grid-mwh", "min-grid-co2"),
+    objectives: Iterable[str] = ("min-grid-co2",),
     battery_capacity_mwh: float = 535.4,
     battery_roundtrip_efficiency: float = 0.97,
     grid_import_limit_mw: float | None = None,
@@ -319,7 +319,7 @@ def run_country_growth_load_shift_optimization(
     output_dir: str | Path = DEFAULT_OUTPUT_DIR,
     include_not_ready: bool = False,
     cooling: str = "seawater",
-    objectives: Iterable[str] = ("min-grid-mwh", "min-grid-co2"),
+    objectives: Iterable[str] = ("min-grid-co2",),
     workload_file: str | Path = WORKLOAD_FILE,
     idle_power_fraction: float = 0.35,
     hours: int | None = 8760,
@@ -2345,7 +2345,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--time-alignment", choices=["sst", "latest", "start_time"], default=None)
     parser.add_argument("--max-carbon-gap-hours", type=int, default=6)
     parser.add_argument("--cooling", choices=["seawater", "air_source"], default="seawater")
-    parser.add_argument("--objectives", nargs="+", default=["min-grid-mwh", "min-grid-co2"])
+    parser.add_argument("--objectives", nargs="+", default=["min-grid-co2"])
     parser.add_argument("--battery-capacity-mwh", type=float, default=535.4)
     parser.add_argument("--battery-roundtrip-efficiency", type=float, default=0.97)
     parser.add_argument("--grid-import-limit-mw", type=float, default=None)

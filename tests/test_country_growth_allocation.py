@@ -379,7 +379,6 @@ def test_load_shift_main_function_excludes_battery_scenario(
         ),
         wind_calculator=lambda **kwargs: _fake_wind_result(),
         optimizer=_fake_optimizer,
-        objectives=("min-grid-mwh",),
         hours=24,
         workers=2,
     )
@@ -387,6 +386,7 @@ def test_load_shift_main_function_excludes_battery_scenario(
     assert output_files["load_shift_city_summary_csv"].exists()
     assert output_files["load_shift_country_summary_csv"].exists()
     city_summary = pd.read_csv(output_files["load_shift_city_summary_csv"])
+    assert set(city_summary["objective"]) == {"min-grid-co2"}
     assert set(city_summary["comparison_optimization_scenario"]) == {"load_shift"}
     assert "load_shift_battery" not in set(city_summary["comparison_optimization_scenario"])
     assert "grid_purchase_mwh_savings_vs_baseline" in city_summary.columns

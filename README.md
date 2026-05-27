@@ -212,7 +212,7 @@ python -m scripts.run_country_growth_allocation ^
 ```
 
 `--workers` 控制国家级并发线程数，默认 `15`。每个国家占用一个线程，国家内部的城市和规模任务串行执行，避免嵌套线程导致资源过载；如果优化求解器或机器内存成为瓶颈，可以降低线程数。
-`--mode cooling` 只运行空气源/海水源热泵对比；`--mode load-shift` 只运行风机容量需求与负荷迁移优化；`--mode all` 依次运行两类汇总。
+`--mode cooling` 只运行空气源/海水源热泵对比；`--mode load-shift` 只运行风机容量需求与负荷迁移优化；`--mode all` 依次运行两类汇总。负荷迁移优化默认只使用 `min-grid-co2` 目标，以最小化购电碳排放；如需同时比较购电量目标，可显式传入 `--objectives min-grid-co2 min-grid-mwh`。
 
 脚本会在项目根目录下维护断点缓存 `country_growth_cache/`，而不是写入 `--output-dir`。每次运行会按运行参数和容量分配生成一个签名子目录，并在子目录中按国家分别保存 scale-level cache CSV，例如：
 
