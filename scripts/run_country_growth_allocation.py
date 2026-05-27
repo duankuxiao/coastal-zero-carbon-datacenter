@@ -1909,7 +1909,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--mode",
         choices=["all", "cooling", "load-shift"],
-        default="all",
+        default="cooling",
         help="Run cooling comparison, load-shift optimization, or both.",
     )
     parser.add_argument(
