@@ -2345,7 +2345,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--time-alignment", choices=["sst", "latest", "start_time"], default=None)
     parser.add_argument("--max-carbon-gap-hours", type=int, default=6)
     parser.add_argument("--cooling", choices=["seawater", "air_source"], default="seawater")
-    parser.add_argument("--objectives", nargs="+", default=["min-grid-co2"])
+    parser.add_argument("--objectives", nargs="+", default=["min-grid-co2"], help="min-grid-co2 / min-grid-mwh")
     parser.add_argument("--battery-capacity-mwh", type=float, default=535.4)
     parser.add_argument("--battery-roundtrip-efficiency", type=float, default=0.97)
     parser.add_argument("--grid-import-limit-mw", type=float, default=None)
