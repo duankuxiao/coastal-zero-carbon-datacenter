@@ -6,6 +6,7 @@ import time
 import pandas as pd
 import pytest
 
+from scripts import run_country_growth_allocation as country_growth_allocation_module
 from scripts.run_country_growth_allocation import (
     append_scale_totals,
     build_city_scale_allocations,
@@ -238,9 +239,13 @@ def test_parallel_cooling_uses_thread_safe_cache_for_duplicate_tasks():
     assert len(wind_calls) == 1
 
 
-def test_cooling_main_function_writes_city_and_country_summaries(tmp_path: Path):
+def test_cooling_main_function_writes_city_and_country_summaries(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(country_growth_allocation_module, "ROOT_DIR", tmp_path / "root")
     output_files = run_country_growth_cooling_comparison(
-        output_dir=tmp_path,
+        output_dir=tmp_path / "results",
         country_rows=_country_rows(country_growth_mw=100.0),
         city_rows=_city_rows(),
         scale_rows=_scale_rows(),
@@ -260,9 +265,111 @@ def test_cooling_main_function_writes_city_and_country_summaries(tmp_path: Path)
     assert "total_energy_kwh_savings_vs_air_source" in city_summary.columns
 
 
-def test_load_shift_main_function_excludes_battery_scenario(tmp_path: Path):
+def test_cooling_main_function_reuses_root_cache_for_completed_cities(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(country_growth_allocation_module, "ROOT_DIR", tmp_path)
+    output_dir = tmp_path / "results"
+    calls = {"energy": 0, "wind": 0}
+
+    def fake_energy(**kwargs):
+        calls["energy"] += 1
+        return _fake_energy_result(kwargs["cooling_type"], kwargs["rated_it_power_kw"])
+
+    def fake_wind(**kwargs):
+        calls["wind"] += 1
+        return _fake_wind_result()
+
+    first_output_files = run_country_growth_cooling_comparison(
+        output_dir=output_dir,
+        country_rows=_country_rows(country_growth_mw=100.0),
+        city_rows=_city_rows(),
+        scale_rows=_scale_rows(),
+        energy_calculator=fake_energy,
+        wind_calculator=fake_wind,
+        hours=24,
+        workers=2,
+    )
+    first_energy_calls = calls["energy"]
+    first_wind_calls = calls["wind"]
+    assert first_energy_calls > 0
+    assert first_wind_calls > 0
+    first_city_shape = pd.read_csv(first_output_files["cooling_city_summary_csv"]).shape
+
+    calls["energy"] = 0
+    calls["wind"] = 0
+    second_output_files = run_country_growth_cooling_comparison(
+        output_dir=output_dir,
+        country_rows=_country_rows(country_growth_mw=100.0),
+        city_rows=_city_rows(),
+        scale_rows=_scale_rows(),
+        energy_calculator=fake_energy,
+        wind_calculator=fake_wind,
+        hours=24,
+        workers=2,
+    )
+
+    cache_dirs = list((tmp_path / "country_growth_cache").glob("country_growth_cooling_scale_cache_24h_*"))
+    assert len(cache_dirs) == 1
+    assert cache_dirs[0].is_dir()
+    cache_files = list(cache_dirs[0].glob("*.csv"))
+    assert len(cache_files) == 1
+    assert not (output_dir / "country_growth_cache").exists()
+    assert calls == {"energy": 0, "wind": 0}
+    assert first_city_shape == pd.read_csv(second_output_files["cooling_city_summary_csv"]).shape
+
+
+def test_cooling_uses_country_level_workers_and_country_cache_files(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(country_growth_allocation_module, "ROOT_DIR", tmp_path)
+    country_rows = [_country_row("Country A", 100.0), _country_row("Country B", 100.0)]
+    city_rows = [
+        {"country": "Country A", "datacentermap_market": "A City", "toolkit_ready": True},
+        {"country": "Country B", "datacentermap_market": "B City", "toolkit_ready": True},
+    ]
+    active_energy_calls = 0
+    max_active_energy_calls = 0
+    counter_lock = threading.Lock()
+
+    def fake_energy(**kwargs):
+        nonlocal active_energy_calls, max_active_energy_calls
+        with counter_lock:
+            active_energy_calls += 1
+            max_active_energy_calls = max(max_active_energy_calls, active_energy_calls)
+        time.sleep(0.01)
+        with counter_lock:
+            active_energy_calls -= 1
+        return _fake_energy_result(kwargs["cooling_type"], kwargs["rated_it_power_kw"])
+
+    run_country_growth_cooling_comparison(
+        output_dir=tmp_path / "results",
+        country_rows=country_rows,
+        city_rows=city_rows,
+        scale_rows=_scale_rows(),
+        energy_calculator=fake_energy,
+        wind_calculator=lambda **kwargs: _fake_wind_result(),
+        hours=24,
+        workers=2,
+    )
+
+    cache_dirs = list((tmp_path / "country_growth_cache").glob("country_growth_cooling_scale_cache_24h_*"))
+    assert len(cache_dirs) == 1
+    cache_files = list(cache_dirs[0].glob("*.csv"))
+    assert len(cache_files) == 2
+    assert {pd.read_csv(path)["country"].iloc[0] for path in cache_files} == {"Country A", "Country B"}
+    assert max_active_energy_calls > 1
+
+
+def test_load_shift_main_function_excludes_battery_scenario(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(country_growth_allocation_module, "ROOT_DIR", tmp_path / "root")
     output_files = run_country_growth_load_shift_optimization(
-        output_dir=tmp_path,
+        output_dir=tmp_path / "results",
         country_rows=_country_rows(country_growth_mw=100.0),
         city_rows=_city_rows(),
         scale_rows=_scale_rows(),
@@ -298,19 +405,26 @@ def _sample_allocations(country_growth_mw: float, coastal_share_pct: float = 100
 
 
 def _country_rows(country_growth_mw: float, coastal_share_pct: float = 100.0) -> list[dict[str, object]]:
+    return [_country_row("Country", country_growth_mw, coastal_share_pct=coastal_share_pct)]
+
+
+def _country_row(
+    country: str,
+    country_growth_mw: float,
+    *,
+    coastal_share_pct: float = 100.0,
+) -> dict[str, object]:
     baseline_mw = 1000.0
     scenario_mw = baseline_mw + country_growth_mw
-    return [
-        {
-            "country": "Country",
-            "coastal_share_of_total_pct": coastal_share_pct,
-            "total_mw_2025": baseline_mw,
-            "total_mw_2030_Base": scenario_mw,
-            "total_mw_2030_Lift-Off": scenario_mw,
-            "total_mw_2030_High Efficiency": scenario_mw,
-            "total_mw_2030_Headwinds": scenario_mw,
-        }
-    ]
+    return {
+        "country": country,
+        "coastal_share_of_total_pct": coastal_share_pct,
+        "total_mw_2025": baseline_mw,
+        "total_mw_2030_Base": scenario_mw,
+        "total_mw_2030_Lift-Off": scenario_mw,
+        "total_mw_2030_High Efficiency": scenario_mw,
+        "total_mw_2030_Headwinds": scenario_mw,
+    }
 
 
 def _city_rows() -> list[dict[str, object]]:

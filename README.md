@@ -207,12 +207,26 @@ python -m scripts.run_country_growth_allocation ^
   --hours 8760 ^
   --start-time "2025-01-01 00:00" ^
   --mode all ^
-  --workers 4 ^
+  --workers 15 ^
   --output-dir results/country_growth_allocation
 ```
 
-`--workers` 控制冷却和优化计算的线程数，默认 `1` 保持串行行为。建议先用 2 到 4 个线程试跑；如果优化求解器或机器内存成为瓶颈，可以降回 `--workers 1`。
+`--workers` 控制国家级并发线程数，默认 `15`。每个国家占用一个线程，国家内部的城市和规模任务串行执行，避免嵌套线程导致资源过载；如果优化求解器或机器内存成为瓶颈，可以降低线程数。
 `--mode cooling` 只运行空气源/海水源热泵对比；`--mode load-shift` 只运行风机容量需求与负荷迁移优化；`--mode all` 依次运行两类汇总。
+
+脚本会在项目根目录下维护断点缓存 `country_growth_cache/`，而不是写入 `--output-dir`。每次运行会按运行参数和容量分配生成一个签名子目录，并在子目录中按国家分别保存 scale-level cache CSV，例如：
+
+```text
+country_growth_cache/
+  country_growth_cooling_scale_cache_8760h_<signature>/
+    china_<hash>.csv
+    japan_<hash>.csv
+  country_growth_load_shift_scale_cache_8760h_<signature>/
+    china_<hash>.csv
+    japan_<hash>.csv
+```
+
+每个国家计算完成后只写入该国家自己的 cache 文件，并用当前已完成国家的缓存刷新 `--output-dir` 下的城市汇总和国家平均汇总 CSV。重新运行时会先检查对应国家 cache，已完整存在的城市会跳过，只补算缺失城市。
 
 Python 中也可以直接调用两个主函数：
 

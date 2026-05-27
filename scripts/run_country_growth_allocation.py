@@ -11,6 +11,8 @@ and large data-center scales before running cooling and dispatch comparisons.
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
 import math
 import re
 import sys
@@ -42,6 +44,7 @@ from scripts.run_load_shift_and_battery_optimization import (
 
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
+CACHE_DIR_NAME = "country_growth_cache"
 COUNTRY_MANIFEST_SHEET = "Country_manifest"
 CITY_MANIFEST_SHEET = "City_manifest"
 DATACENTER_SCALE_SHEET = "Datacenter_scale"
@@ -134,7 +137,7 @@ def run_country_growth_allocation(
     wind_cut_in: float = 3.0,
     wind_rated: float = 12.0,
     wind_cut_out: float = 25.0,
-    workers: int = 1,
+    workers: int = 15,
     country_rows: list[dict[str, object]] | None = None,
     city_rows: list[dict[str, object]] | None = None,
     scale_rows: list[dict[str, object]] | None = None,
@@ -262,7 +265,7 @@ def run_country_growth_cooling_comparison(
     wind_cut_in: float = 3.0,
     wind_rated: float = 12.0,
     wind_cut_out: float = 25.0,
-    workers: int = 1,
+    workers: int = 15,
     country_rows: list[dict[str, object]] | None = None,
     city_rows: list[dict[str, object]] | None = None,
     scale_rows: list[dict[str, object]] | None = None,
@@ -331,7 +334,7 @@ def run_country_growth_load_shift_optimization(
     wind_cut_in: float = 3.0,
     wind_rated: float = 12.0,
     wind_cut_out: float = 25.0,
-    workers: int = 1,
+    workers: int = 15,
     country_rows: list[dict[str, object]] | None = None,
     city_rows: list[dict[str, object]] | None = None,
     scale_rows: list[dict[str, object]] | None = None,
@@ -440,49 +443,98 @@ def _run_country_growth_cooling_outputs(
     workers: int,
     write_debug_scale_results: bool,
 ) -> dict[str, Path]:
-    cooling_city_scale = run_cooling_comparisons(
-        allocations=allocations,
-        workload_file=workload_file,
-        idle_power_fraction=idle_power_fraction,
-        hours=hours,
-        start_time=start_time,
-        time_alignment=_baseline_time_alignment(start_time, time_alignment),
-        max_carbon_gap_hours=max_carbon_gap_hours,
-        hub_height_m=hub_height_m,
-        wind_loss_fraction=wind_loss_fraction,
-        wind_cut_in=wind_cut_in,
-        wind_rated=wind_rated,
-        wind_cut_out=wind_cut_out,
-        energy_cache=energy_cache,
-        wind_resource_cache=wind_resource_cache,
-        energy_cache_locks=energy_cache_locks,
-        wind_resource_cache_locks=wind_resource_cache_locks,
-        cache_locks_guard=cache_locks_guard,
-        energy_calculator=energy_calculator,
-        wind_calculator=wind_calculator,
-        workers=workers,
-    )
-    cooling_city_results = select_all_scale_results(
-        append_scale_totals(cooling_city_scale, COOLING_METRICS, extra_group_columns=["cooling_type"])
-    )
-    cooling_country_results = build_country_average_results(
-        cooling_city_results,
-        metric_columns=COOLING_METRICS,
-        extra_group_columns=["cooling_type", "scale"],
-    )
-    cooling_city_summary = build_cooling_comparison_results(cooling_city_results)
-    cooling_country_summary = build_cooling_comparison_results(cooling_country_results)
-
     suffix = _hours_token(hours)
+    resolved_time_alignment = _baseline_time_alignment(start_time, time_alignment)
     files = {
         "cooling_city_summary_csv": output_path / f"country_growth_cooling_city_summary_{suffix}.csv",
         "cooling_country_summary_csv": output_path / f"country_growth_cooling_country_summary_{suffix}.csv",
     }
-    cooling_city_summary.to_csv(files["cooling_city_summary_csv"], index=False, encoding="utf-8-sig")
-    cooling_country_summary.to_csv(files["cooling_country_summary_csv"], index=False, encoding="utf-8-sig")
     if write_debug_scale_results:
         files["cooling_scale_debug_csv"] = output_path / f"country_growth_cooling_scale_debug_{suffix}.csv"
-        cooling_city_scale.to_csv(files["cooling_scale_debug_csv"], index=False, encoding="utf-8-sig")
+    cache_dir = _country_growth_cache_dir(
+        mode="cooling",
+        suffix=suffix,
+        allocations=allocations,
+        parameters={
+            "workload_file": workload_file,
+            "idle_power_fraction": idle_power_fraction,
+            "hours": hours,
+            "start_time": start_time,
+            "time_alignment": resolved_time_alignment,
+            "max_carbon_gap_hours": max_carbon_gap_hours,
+            "hub_height_m": hub_height_m,
+            "wind_loss_fraction": wind_loss_fraction,
+            "wind_cut_in": wind_cut_in,
+            "wind_rated": wind_rated,
+            "wind_cut_out": wind_cut_out,
+            "cooling_types": COOLING_TYPES,
+        },
+    )
+    files["cooling_scale_cache_dir"] = cache_dir
+    countries = _ordered_unique(allocations["country"]) if "country" in allocations else []
+
+    if not countries:
+        _write_cooling_outputs(pd.DataFrame(), files, write_debug_scale_results)
+        return files
+
+    def run_country(country: object) -> tuple[object, pd.DataFrame]:
+        country_allocations = allocations[allocations["country"] == country].copy()
+        country_cache_path = _country_scale_cache_file(cache_dir, country)
+        country_cached_results = _read_scale_cache(country_cache_path)
+        uncached_allocations = _filter_uncached_city_allocations(
+            allocations=country_allocations,
+            cached_results=country_cached_results,
+            task_key_columns=["cooling_type"],
+            task_key_values=[(cooling_type,) for cooling_type in COOLING_TYPES],
+        )
+        if uncached_allocations.empty:
+            print(f"Cooling cache hit for {country}: all city results already cached.", flush=True)
+            return country, country_cached_results
+        else:
+            print(
+                f"Cooling cache miss for {country}: running {uncached_allocations['city'].nunique()} city result group(s).",
+                flush=True,
+            )
+            country_scale_results = run_cooling_comparisons(
+                allocations=uncached_allocations,
+                workload_file=workload_file,
+                idle_power_fraction=idle_power_fraction,
+                hours=hours,
+                start_time=start_time,
+                time_alignment=resolved_time_alignment,
+                max_carbon_gap_hours=max_carbon_gap_hours,
+                hub_height_m=hub_height_m,
+                wind_loss_fraction=wind_loss_fraction,
+                wind_cut_in=wind_cut_in,
+                wind_rated=wind_rated,
+                wind_cut_out=wind_cut_out,
+                energy_cache=energy_cache,
+                wind_resource_cache=wind_resource_cache,
+                energy_cache_locks=energy_cache_locks,
+                wind_resource_cache_locks=wind_resource_cache_locks,
+                cache_locks_guard=cache_locks_guard,
+                energy_calculator=energy_calculator,
+                wind_calculator=wind_calculator,
+                workers=1,
+            )
+            country_cached_results = _merge_scale_cache(
+                country_cached_results,
+                country_scale_results,
+                key_columns=["country", "growth_scenario", "city", "scale", "cooling_type"],
+            )
+            _write_scale_cache(country_cached_results, country_cache_path)
+            return country, country_cached_results
+
+    for country, _ in _run_country_tasks(countries, run_country, workers):
+        cooling_city_scale = _read_all_country_scale_caches(cache_dir)
+        completed_scale_results = _complete_cached_city_results(
+            allocations=allocations,
+            cached_results=cooling_city_scale,
+            task_key_columns=["cooling_type"],
+            task_key_values=[(cooling_type,) for cooling_type in COOLING_TYPES],
+        )
+        _write_cooling_outputs(completed_scale_results, files, write_debug_scale_results)
+        print(f"Cooling outputs refreshed after {country}: {files['cooling_country_summary_csv']}", flush=True)
     return files
 
 
@@ -519,43 +571,162 @@ def _run_country_growth_load_shift_outputs(
     workers: int,
     write_debug_scale_results: bool,
 ) -> dict[str, Path]:
-    optimization_city_scale = run_optimization_comparisons(
-        allocations=allocations,
+    suffix = _hours_token(hours)
+    scenario_configs = _load_shift_scenario_configs(
         cooling=cooling,
-        objectives=objectives,
-        scenario_configs=_load_shift_scenario_configs(
-            cooling=cooling,
-            load_shift_fraction=load_shift_fraction,
-        ),
-        workload_file=workload_file,
-        idle_power_fraction=idle_power_fraction,
-        hours=hours,
-        start_time=start_time,
-        time_alignment=time_alignment,
-        max_carbon_gap_hours=max_carbon_gap_hours,
-        battery_capacity_mwh=0.0,
-        battery_roundtrip_efficiency=battery_roundtrip_efficiency,
-        grid_import_limit_mw=grid_import_limit_mw,
-        battery_charge_limit_mw=0.0,
-        battery_discharge_limit_mw=0.0,
         load_shift_fraction=load_shift_fraction,
-        hub_height_m=hub_height_m,
-        wind_loss_fraction=wind_loss_fraction,
-        wind_cut_in=wind_cut_in,
-        wind_rated=wind_rated,
-        wind_cut_out=wind_cut_out,
-        energy_cache=energy_cache,
-        wind_resource_cache=wind_resource_cache,
-        required_wind_cache=required_wind_cache,
-        energy_cache_locks=energy_cache_locks,
-        wind_resource_cache_locks=wind_resource_cache_locks,
-        required_wind_cache_locks=required_wind_cache_locks,
-        cache_locks_guard=cache_locks_guard,
-        energy_calculator=energy_calculator,
-        wind_calculator=wind_calculator,
-        optimizer=optimizer,
-        workers=workers,
     )
+    files = {
+        "load_shift_city_summary_csv": output_path / f"country_growth_load_shift_city_summary_{suffix}.csv",
+        "load_shift_country_summary_csv": output_path / f"country_growth_load_shift_country_summary_{suffix}.csv",
+    }
+    if write_debug_scale_results:
+        files["load_shift_scale_debug_csv"] = output_path / f"country_growth_load_shift_scale_debug_{suffix}.csv"
+    cache_dir = _country_growth_cache_dir(
+        mode="load_shift",
+        suffix=suffix,
+        allocations=allocations,
+        parameters={
+            "cooling": cooling,
+            "objectives": objectives,
+            "scenario_configs": scenario_configs,
+            "workload_file": workload_file,
+            "idle_power_fraction": idle_power_fraction,
+            "hours": hours,
+            "start_time": start_time,
+            "time_alignment": time_alignment,
+            "max_carbon_gap_hours": max_carbon_gap_hours,
+            "battery_roundtrip_efficiency": battery_roundtrip_efficiency,
+            "grid_import_limit_mw": grid_import_limit_mw,
+            "load_shift_fraction": load_shift_fraction,
+            "hub_height_m": hub_height_m,
+            "wind_loss_fraction": wind_loss_fraction,
+            "wind_cut_in": wind_cut_in,
+            "wind_rated": wind_rated,
+            "wind_cut_out": wind_cut_out,
+        },
+    )
+    files["load_shift_scale_cache_dir"] = cache_dir
+    countries = _ordered_unique(allocations["country"]) if "country" in allocations else []
+
+    if not countries:
+        _write_optimization_outputs(pd.DataFrame(), files, write_debug_scale_results)
+        return files
+
+    task_key_values = [
+        (str(scenario_config["scenario"]), objective, str(scenario_config["cooling_type"]))
+        for scenario_config in scenario_configs
+        for objective in objectives
+    ]
+
+    def run_country(country: object) -> tuple[object, pd.DataFrame]:
+        country_allocations = allocations[allocations["country"] == country].copy()
+        country_cache_path = _country_scale_cache_file(cache_dir, country)
+        country_cached_results = _read_scale_cache(country_cache_path)
+        uncached_allocations = _filter_uncached_city_allocations(
+            allocations=country_allocations,
+            cached_results=country_cached_results,
+            task_key_columns=["optimization_scenario", "objective", "cooling_type"],
+            task_key_values=task_key_values,
+        )
+        if uncached_allocations.empty:
+            print(f"Load-shift cache hit for {country}: all city results already cached.", flush=True)
+            return country, country_cached_results
+        else:
+            print(
+                "Load-shift cache miss for "
+                f"{country}: running {uncached_allocations['city'].nunique()} city result group(s).",
+                flush=True,
+            )
+            country_scale_results = run_optimization_comparisons(
+                allocations=uncached_allocations,
+                cooling=cooling,
+                objectives=objectives,
+                scenario_configs=scenario_configs,
+                workload_file=workload_file,
+                idle_power_fraction=idle_power_fraction,
+                hours=hours,
+                start_time=start_time,
+                time_alignment=time_alignment,
+                max_carbon_gap_hours=max_carbon_gap_hours,
+                battery_capacity_mwh=0.0,
+                battery_roundtrip_efficiency=battery_roundtrip_efficiency,
+                grid_import_limit_mw=grid_import_limit_mw,
+                battery_charge_limit_mw=0.0,
+                battery_discharge_limit_mw=0.0,
+                load_shift_fraction=load_shift_fraction,
+                hub_height_m=hub_height_m,
+                wind_loss_fraction=wind_loss_fraction,
+                wind_cut_in=wind_cut_in,
+                wind_rated=wind_rated,
+                wind_cut_out=wind_cut_out,
+                energy_cache=energy_cache,
+                wind_resource_cache=wind_resource_cache,
+                required_wind_cache=required_wind_cache,
+                energy_cache_locks=energy_cache_locks,
+                wind_resource_cache_locks=wind_resource_cache_locks,
+                required_wind_cache_locks=required_wind_cache_locks,
+                cache_locks_guard=cache_locks_guard,
+                energy_calculator=energy_calculator,
+                wind_calculator=wind_calculator,
+                optimizer=optimizer,
+                workers=1,
+            )
+            country_cached_results = _merge_scale_cache(
+                country_cached_results,
+                country_scale_results,
+                key_columns=[
+                    "country",
+                    "growth_scenario",
+                    "city",
+                    "scale",
+                    "optimization_scenario",
+                    "objective",
+                    "cooling_type",
+                ],
+            )
+            _write_scale_cache(country_cached_results, country_cache_path)
+            return country, country_cached_results
+
+    for country, _ in _run_country_tasks(countries, run_country, workers):
+        optimization_city_scale = _read_all_country_scale_caches(cache_dir)
+        completed_scale_results = _complete_cached_city_results(
+            allocations=allocations,
+            cached_results=optimization_city_scale,
+            task_key_columns=["optimization_scenario", "objective", "cooling_type"],
+            task_key_values=task_key_values,
+        )
+        _write_optimization_outputs(completed_scale_results, files, write_debug_scale_results)
+        print(f"Load-shift outputs refreshed after {country}: {files['load_shift_country_summary_csv']}", flush=True)
+    return files
+
+
+def _write_cooling_outputs(
+    cooling_city_scale: pd.DataFrame,
+    files: dict[str, Path],
+    write_debug_scale_results: bool,
+) -> None:
+    cooling_city_results = select_all_scale_results(
+        append_scale_totals(cooling_city_scale, COOLING_METRICS, extra_group_columns=["cooling_type"])
+    )
+    cooling_country_results = build_country_average_results(
+        cooling_city_results,
+        metric_columns=COOLING_METRICS,
+        extra_group_columns=["cooling_type", "scale"],
+    )
+    cooling_city_summary = build_cooling_comparison_results(cooling_city_results)
+    cooling_country_summary = build_cooling_comparison_results(cooling_country_results)
+    _write_csv(cooling_city_summary, files["cooling_city_summary_csv"])
+    _write_csv(cooling_country_summary, files["cooling_country_summary_csv"])
+    if write_debug_scale_results and "cooling_scale_debug_csv" in files:
+        _write_csv(cooling_city_scale, files["cooling_scale_debug_csv"])
+
+
+def _write_optimization_outputs(
+    optimization_city_scale: pd.DataFrame,
+    files: dict[str, Path],
+    write_debug_scale_results: bool,
+) -> None:
     optimization_city_results = select_all_scale_results(
         append_scale_totals(
             optimization_city_scale,
@@ -576,18 +747,268 @@ def _run_country_growth_load_shift_outputs(
     )
     optimization_city_summary = build_optimization_comparison_results(optimization_city_results)
     optimization_country_summary = build_optimization_comparison_results(optimization_country_results)
+    _write_csv(optimization_city_summary, files["load_shift_city_summary_csv"])
+    _write_csv(optimization_country_summary, files["load_shift_country_summary_csv"])
+    if write_debug_scale_results and "load_shift_scale_debug_csv" in files:
+        _write_csv(optimization_city_scale, files["load_shift_scale_debug_csv"])
 
-    suffix = _hours_token(hours)
-    files = {
-        "load_shift_city_summary_csv": output_path / f"country_growth_load_shift_city_summary_{suffix}.csv",
-        "load_shift_country_summary_csv": output_path / f"country_growth_load_shift_country_summary_{suffix}.csv",
+
+def _country_growth_cache_dir(
+    *,
+    mode: str,
+    suffix: str,
+    allocations: pd.DataFrame,
+    parameters: dict[str, object],
+) -> Path:
+    cache_root = ROOT_DIR / CACHE_DIR_NAME
+    cache_root.mkdir(parents=True, exist_ok=True)
+    signature = _cache_signature(
+        {
+            "mode": mode,
+            "parameters": parameters,
+            "allocation_token": _allocation_cache_token(allocations),
+        }
+    )
+    cache_dir = cache_root / f"country_growth_{mode}_scale_cache_{suffix}_{signature}"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    return cache_dir
+
+
+def _country_scale_cache_file(cache_dir: Path, country: object) -> Path:
+    country_text = _text(country) or "country"
+    slug = _slug(country_text)
+    signature = _cache_signature(country_text)[:8]
+    return cache_dir / f"{slug}_{signature}.csv"
+
+
+def _read_all_country_scale_caches(cache_dir: Path) -> pd.DataFrame:
+    if not cache_dir.exists():
+        return pd.DataFrame()
+    frames = [
+        frame
+        for frame in (_read_scale_cache(path) for path in sorted(cache_dir.glob("*.csv")))
+        if not frame.empty
+    ]
+    if not frames:
+        return pd.DataFrame()
+    return _sort_scale_results(pd.concat(frames, ignore_index=True, sort=False))
+
+
+def _run_country_tasks(
+    countries: list[object],
+    run_country: Callable[[object], tuple[object, pd.DataFrame]],
+    workers: int,
+) -> Iterable[tuple[object, pd.DataFrame]]:
+    if not countries:
+        return
+    worker_count = min(_normalize_workers(workers), len(countries))
+    if worker_count <= 1:
+        for country in countries:
+            yield run_country(country)
+        return
+
+    with ThreadPoolExecutor(max_workers=worker_count) as executor:
+        futures = [executor.submit(run_country, country) for country in countries]
+        for future in as_completed(futures):
+            yield future.result()
+
+
+def _allocation_cache_token(allocations: pd.DataFrame) -> str:
+    if allocations.empty:
+        return _cache_signature([])
+    columns = [column for column in BASE_METADATA_COLUMNS if column in allocations.columns]
+    frame = allocations[columns].copy()
+    sort_columns = [column for column in ["country", "growth_scenario", "city", "scale"] if column in frame.columns]
+    if sort_columns:
+        frame = frame.sort_values(sort_columns, kind="stable")
+    return _cache_signature(frame.reset_index(drop=True).to_dict(orient="records"))
+
+
+def _read_scale_cache(path: Path) -> pd.DataFrame:
+    if not path.exists():
+        return pd.DataFrame()
+    try:
+        return pd.read_csv(path)
+    except (FileNotFoundError, pd.errors.EmptyDataError):
+        return pd.DataFrame()
+
+
+def _write_scale_cache(results: pd.DataFrame, path: Path) -> None:
+    _write_csv(_sort_scale_results(results), path)
+
+
+def _merge_scale_cache(
+    cached_results: pd.DataFrame,
+    new_results: pd.DataFrame,
+    *,
+    key_columns: list[str],
+) -> pd.DataFrame:
+    if cached_results.empty:
+        return _sort_scale_results(new_results.copy())
+    if new_results.empty:
+        return _sort_scale_results(cached_results.copy())
+    combined = pd.concat([cached_results, new_results], ignore_index=True, sort=False)
+    if all(column in combined.columns for column in key_columns):
+        combined["_cache_key"] = [
+            tuple(_cache_key_value(row.get(column)) for column in key_columns)
+            for row in combined.to_dict(orient="records")
+        ]
+        combined = combined.drop_duplicates("_cache_key", keep="last").drop(columns=["_cache_key"])
+    return _sort_scale_results(combined)
+
+
+def _filter_uncached_city_allocations(
+    *,
+    allocations: pd.DataFrame,
+    cached_results: pd.DataFrame,
+    task_key_columns: list[str],
+    task_key_values: list[tuple[object, ...]],
+) -> pd.DataFrame:
+    if allocations.empty:
+        return allocations.copy()
+    if cached_results.empty or not _has_cache_key_columns(cached_results, task_key_columns):
+        return allocations.copy()
+    cached_keys = _cached_result_keys(cached_results, task_key_columns)
+    uncached_indices: list[object] = []
+    for _, group in allocations.groupby(["country", "growth_scenario", "city"], dropna=False, sort=False):
+        expected_keys = _expected_city_result_keys(group, task_key_values)
+        if not expected_keys.issubset(cached_keys):
+            uncached_indices.extend(group.index.tolist())
+    return allocations.loc[uncached_indices].copy()
+
+
+def _complete_cached_city_results(
+    *,
+    allocations: pd.DataFrame,
+    cached_results: pd.DataFrame,
+    task_key_columns: list[str],
+    task_key_values: list[tuple[object, ...]],
+) -> pd.DataFrame:
+    if allocations.empty or cached_results.empty or not _has_cache_key_columns(cached_results, task_key_columns):
+        return cached_results.iloc[0:0].copy()
+    cached_keys = _cached_result_keys(cached_results, task_key_columns)
+    complete_city_keys: set[tuple[object, ...]] = set()
+    for city_key, group in allocations.groupby(["country", "growth_scenario", "city"], dropna=False, sort=False):
+        expected_keys = _expected_city_result_keys(group, task_key_values)
+        if expected_keys and expected_keys.issubset(cached_keys):
+            complete_city_keys.add(tuple(_cache_key_value(value) for value in _as_tuple(city_key)))
+    rows = [
+        row
+        for row in cached_results.to_dict(orient="records")
+        if tuple(_cache_key_value(row.get(column)) for column in ["country", "growth_scenario", "city"])
+        in complete_city_keys
+    ]
+    return _sort_scale_results(pd.DataFrame(rows, columns=cached_results.columns))
+
+
+def _has_cache_key_columns(cached_results: pd.DataFrame, task_key_columns: list[str]) -> bool:
+    required_columns = ["country", "growth_scenario", "city", "scale", *task_key_columns]
+    return all(column in cached_results.columns for column in required_columns)
+
+
+def _cached_result_keys(
+    cached_results: pd.DataFrame,
+    task_key_columns: list[str],
+) -> set[tuple[object, ...]]:
+    key_columns = ["country", "growth_scenario", "city", "scale", *task_key_columns]
+    return {
+        tuple(_cache_key_value(row.get(column)) for column in key_columns)
+        for row in cached_results.to_dict(orient="records")
     }
-    optimization_city_summary.to_csv(files["load_shift_city_summary_csv"], index=False, encoding="utf-8-sig")
-    optimization_country_summary.to_csv(files["load_shift_country_summary_csv"], index=False, encoding="utf-8-sig")
-    if write_debug_scale_results:
-        files["load_shift_scale_debug_csv"] = output_path / f"country_growth_load_shift_scale_debug_{suffix}.csv"
-        optimization_city_scale.to_csv(files["load_shift_scale_debug_csv"], index=False, encoding="utf-8-sig")
-    return files
+
+
+def _expected_city_result_keys(
+    allocation_group: pd.DataFrame,
+    task_key_values: list[tuple[object, ...]],
+) -> set[tuple[object, ...]]:
+    expected_keys: set[tuple[object, ...]] = set()
+    for allocation in allocation_group.to_dict(orient="records"):
+        base_key = tuple(
+            _cache_key_value(allocation.get(column))
+            for column in ["country", "growth_scenario", "city", "scale"]
+        )
+        for task_values in task_key_values:
+            expected_keys.add(base_key + tuple(_cache_key_value(value) for value in task_values))
+    return expected_keys
+
+
+def _sort_scale_results(results: pd.DataFrame) -> pd.DataFrame:
+    if results.empty:
+        return results.copy()
+    sort_columns = [
+        column
+        for column in [
+            "country",
+            "growth_scenario",
+            "city",
+            "scale",
+            "cooling_type",
+            "optimization_scenario",
+            "objective",
+        ]
+        if column in results.columns
+    ]
+    if not sort_columns:
+        return results.reset_index(drop=True)
+    return results.sort_values(sort_columns, kind="stable").reset_index(drop=True)
+
+
+def _write_csv(frame: pd.DataFrame, path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path = path.with_name(f"{path.name}.tmp")
+    frame.to_csv(temporary_path, index=False, encoding="utf-8-sig")
+    temporary_path.replace(path)
+
+
+def _ordered_unique(values: pd.Series) -> list[object]:
+    return values.drop_duplicates().tolist()
+
+
+def _slug(value: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "_", value.strip().lower())
+    return slug.strip("_") or "country"
+
+
+def _cache_signature(payload: object) -> str:
+    encoded = json.dumps(_json_ready(payload), sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()[:16]
+
+
+def _json_ready(value: object) -> object:
+    if value is None:
+        return None
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, dict):
+        return {str(key): _json_ready(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_ready(item) for item in value]
+    if isinstance(value, (bool, np.bool_)):
+        return bool(value)
+    if isinstance(value, (int, np.integer)):
+        return int(value)
+    if isinstance(value, (float, np.floating)):
+        number = float(value)
+        return None if math.isnan(number) else number
+    try:
+        if pd.isna(value):
+            return None
+    except (TypeError, ValueError):
+        pass
+    return value
+
+
+def _cache_key_value(value: object) -> object:
+    ready = _json_ready(value)
+    if isinstance(ready, str):
+        return ready
+    if ready is None:
+        return ""
+    return ready
+
+
+def _as_tuple(value: object) -> tuple[object, ...]:
+    return value if isinstance(value, tuple) else (value,)
 
 
 def build_country_growths(country_rows: list[dict[str, object]]) -> pd.DataFrame:
@@ -1939,8 +2360,8 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--workers",
         type=int,
-        default=1,
-        help="Number of worker threads for cooling and optimization calculations. Default 1 keeps serial behavior.",
+        default=15,
+        help="Number of country worker threads. Each country runs in one thread; default 15.",
     )
     return parser
 
