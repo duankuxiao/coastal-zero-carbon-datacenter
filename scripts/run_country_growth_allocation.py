@@ -175,7 +175,7 @@ def run_country_growth_allocation(
     """Run country-growth allocation and write CSV outputs."""
     run_mode = _normalize_mode(mode)
     manifest_path = _resolve_path(manifest_file,ROOT_DIR)
-    output_path = _resolve_output_dir(output_dir)
+    output_path = _resolve_output_dir(output_dir, ROOT_DIR)
     worker_count = _normalize_workers(workers)
     if country_rows is None:
         country_rows = _read_xlsx_sheet_rows(manifest_path, COUNTRY_MANIFEST_SHEET)

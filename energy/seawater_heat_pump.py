@@ -356,14 +356,26 @@ def heat_pump_chiller(
         }
 
     curve = _performance_curve(config)
-    rated_capacity_w = _as_float(
-        _cfg(config, "SEAWATER_HEAT_PUMP_RATED_CAPACITY_W", load_w), load_w
+    configured_rated_capacity_w = _as_float(
+        _cfg(config, "SEAWATER_HEAT_PUMP_RATED_CAPACITY_W", 0.0), 0.0
     )
-    rated_capacity_w = max(rated_capacity_w, load_w if rated_capacity_w <= 0 else rated_capacity_w)
+    autosized_capacity = configured_rated_capacity_w <= 0
+    rated_capacity_w = max(configured_rated_capacity_w, 0.0)
     source_ff = _clip(float(source_flow_fraction), 0.0, 1.5)
     load_ff = _clip(float(load_flow_fraction), 0.0, 1.5)
 
     if curve:
+        capacity_multiplier = _curve_fit_capacity_multiplier(
+            curve,
+            source_entering_temp_c,
+            chilled_water_supply_temp_c,
+            source_ff,
+            load_ff,
+        )
+        if autosized_capacity:
+            rated_capacity_w = load_w / max(capacity_multiplier, 1e-9)
+        else:
+            rated_capacity_w = max(rated_capacity_w, 0.0)
         available_capacity_w = _curve_fit_available_capacity_w(
             curve, rated_capacity_w, source_entering_temp_c, chilled_water_supply_temp_c, source_ff, load_ff
         )
@@ -384,10 +396,9 @@ def heat_pump_chiller(
         )
         cop_model = "curve_fit"
     else:
-        available_capacity_w = _as_float(
-            _cfg(config, "SEAWATER_HEAT_PUMP_RATED_CAPACITY_W", load_w), load_w
-        )
-        available_capacity_w = max(available_capacity_w, load_w)
+        if autosized_capacity:
+            rated_capacity_w = load_w
+        available_capacity_w = max(rated_capacity_w, 0.0)
         served_w = min(load_w, available_capacity_w)
         actual_plr = served_w / available_capacity_w if available_capacity_w > 0 else 0.0
         min_plr = _clip(_as_float(_cfg(config, "SEAWATER_HEAT_PUMP_MIN_PLR", 0.10), 0.10), 0.01, 1.0)
@@ -440,6 +451,23 @@ def _curve_fit_available_capacity_w(
     source_flow_fraction: float,
     load_flow_fraction: float,
 ) -> float:
+    multiplier = _curve_fit_capacity_multiplier(
+        curve,
+        source_entering_temp_c,
+        chilled_water_supply_temp_c,
+        source_flow_fraction,
+        load_flow_fraction,
+    )
+    return rated_capacity_w * multiplier
+
+
+def _curve_fit_capacity_multiplier(
+    curve: dict[str, Any],
+    source_entering_temp_c: float,
+    chilled_water_supply_temp_c: float,
+    source_flow_fraction: float,
+    load_flow_fraction: float,
+) -> float:
     capacity_temp = _biquadratic(
         curve.get("capacity_temperature_coefficients"),
         source_entering_temp_c,
@@ -448,8 +476,7 @@ def _curve_fit_available_capacity_w(
     )
     source_flow = _poly(curve.get("capacity_source_flow_coefficients"), source_flow_fraction, 1.0)
     load_flow = _poly(curve.get("capacity_load_flow_coefficients"), load_flow_fraction, 1.0)
-    multiplier = _clip(capacity_temp * source_flow * load_flow, 0.05, 2.5)
-    return rated_capacity_w * multiplier
+    return _clip(capacity_temp * source_flow * load_flow, 0.05, 2.5)
 
 
 def _curve_fit_cop(
@@ -585,6 +612,8 @@ def calculate_seawater_cooling(
     mechanical_served_w = float(heat_pump["cooling_load_served_w"])
     cooling_served_w = free_cooling_served_w + mechanical_served_w
     unmet_w = max(cooling_load_w - cooling_served_w, 0.0)
+    if unmet_w <= max(cooling_load_w, 1.0) * 1e-9:
+        unmet_w = 0.0
     compressor_power_w = float(heat_pump["compressor_power_w"])
     heat_rejection_w = free_cooling_served_w + float(heat_pump["heat_rejection_w"])
     final_source_loop = seawater_intake_loop(heat_rejection_w, source_temp_c, DC_Config)
