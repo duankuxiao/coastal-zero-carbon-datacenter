@@ -426,8 +426,8 @@ def _prepare_country_growth_inputs(
     city_rows: list[dict[str, object]] | None,
     scale_rows: list[dict[str, object]] | None,
 ) -> tuple[Path, pd.DataFrame, pd.DataFrame]:
-    manifest_path = _resolve_path(manifest_file)
-    output_path = _resolve_output_dir(output_dir)
+    manifest_path = _resolve_path(manifest_file, ROOT_DIR)
+    output_path = _resolve_output_dir(output_dir, ROOT_DIR)
     if country_rows is None:
         country_rows = _read_xlsx_sheet_rows(manifest_path, COUNTRY_MANIFEST_SHEET)
     if city_rows is None:
@@ -2525,7 +2525,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--workers",
         type=int,
-        default=15,
+        default=1,
         help="Number of country worker threads. Each country runs in one thread; default 15.",
     )
     return parser

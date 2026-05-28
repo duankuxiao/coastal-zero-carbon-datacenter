@@ -2603,6 +2603,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
 if __name__ == "__main__":
     args = _build_arg_parser().parse_args(sys.argv[1:])
     args.mode = 'cooling'   # ["cooling", "load-shift"]
+    args.workers = 2
     mode = _normalize_mode(args.mode)
 
     if args.dry_run:
