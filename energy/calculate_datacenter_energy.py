@@ -221,6 +221,10 @@ class DataCenterEnergyResult:
     heat_exchanger_aux_energy_kwh: float
     unmet_cooling_energy_kwh: float
     constraint_violation_hours: float
+    outfall_temperature_violation_hours: float = 0.0
+    seawater_temperature_violation_hours: float = 0.0
+    model_warning_count: int = 0
+    model_warning_messages: str = ""
 
 
 def list_available_cities(city_map_file: Path = CITY_MAP_FILE) -> list[str]:
@@ -390,6 +394,10 @@ def calculate_data_center_energy(
         heat_exchanger_aux_energy_kwh=float(np.nansum(simulation["heat_exchanger_aux_power_w"]) / 1000.0),
         unmet_cooling_energy_kwh=float(np.nansum(simulation["unmet_cooling_load_w"]) / 1000.0),
         constraint_violation_hours=float(np.nansum(simulation["constraint_violation"])),
+        outfall_temperature_violation_hours=float(np.nansum(simulation["outfall_temperature_violation"])),
+        seawater_temperature_violation_hours=float(np.nansum(simulation["seawater_temperature_violation"])),
+        model_warning_count=int(simulation["model_warning_count"]),
+        model_warning_messages=str(simulation["model_warning_messages"]),
     )
 
 
@@ -915,7 +923,7 @@ def _simulate_datacenter_energy_with_env_model(
     cooling_type: CoolingType,
     crac_setpoint_c: float,
     progress: bool = True,
-) -> dict[str, np.ndarray]:
+) -> dict[str, object]:
     """Use envs/datacenter.py's detailed IT and HVAC model for hourly energy."""
     _print_progress("Building and calibrating detailed data-center configuration.", enabled=progress)
     dc_config = _build_scaled_dc_config(
@@ -925,6 +933,7 @@ def _simulate_datacenter_energy_with_env_model(
         crac_setpoint_c=crac_setpoint_c,
         progress=progress,
     )
+    model_warning_messages: list[str] = list(getattr(dc_config, "_MODEL_WARNING_MESSAGES", []))
     _print_progress("Initializing detailed IT and HVAC model.", enabled=progress)
     dc_model = DataCenter.DataCenter_ITModel(
         num_racks=dc_config.NUM_RACKS,
@@ -945,6 +954,8 @@ def _simulate_datacenter_energy_with_env_model(
     heat_exchanger_aux_power_w = np.zeros_like(workload, dtype=float)
     unmet_cooling_load_w = np.zeros_like(workload, dtype=float)
     constraint_violation = np.zeros_like(workload, dtype=float)
+    outfall_temperature_violation = np.zeros_like(workload, dtype=float)
+    seawater_temperature_violation = np.zeros_like(workload, dtype=float)
     cooling_modes: list[str] = []
 
     _print_progress(f"Starting hourly simulation for {len(workload)} hour(s).", enabled=progress)
@@ -952,7 +963,8 @@ def _simulate_datacenter_energy_with_env_model(
     for hour_index, cpu_load_fraction in enumerate(workload):
         ite_load_pct = float(np.clip(cpu_load_fraction, 0.0, 1.0) * 100.0)
         ite_load_pct_list = [ite_load_pct for _ in range(dc_config.NUM_RACKS)]
-        with contextlib.redirect_stdout(io.StringIO()):
+        stdout_buffer = io.StringIO()
+        with contextlib.redirect_stdout(stdout_buffer):
             rackwise_cpu_pwr, rackwise_itfan_pwr, rackwise_outlet_temp = (
                 dc_model.compute_datacenter_IT_load_outlet_temp(
                     ITE_load_pct_list=ite_load_pct_list,
@@ -977,6 +989,10 @@ def _simulate_datacenter_energy_with_env_model(
                 DC_Config=dc_config,
                 seawater_temp=seawater_temp,
             )
+        for message in stdout_buffer.getvalue().splitlines():
+            message = message.strip()
+            if message:
+                model_warning_messages.append(message)
 
         it_power_kw[hour_index] = data_center_total_ite_load / 1000.0
         cooling_power_kw[hour_index] = hvac_details["selected_hvac_power"] / 1000.0
@@ -993,6 +1009,12 @@ def _simulate_datacenter_energy_with_env_model(
         heat_exchanger_aux_power_w[hour_index] = float(hvac_details.get("seawater_heat_exchanger_aux_power_w", 0.0))
         unmet_cooling_load_w[hour_index] = float(hvac_details.get("seawater_unmet_cooling_load_w", 0.0))
         constraint_violation[hour_index] = 1.0 if hvac_details.get("seawater_constraint_violation", False) else 0.0
+        outfall_temperature_violation[hour_index] = (
+            1.0 if hvac_details.get("seawater_outfall_temperature_violation", False) else 0.0
+        )
+        seawater_temperature_violation[hour_index] = (
+            1.0 if hvac_details.get("seawater_temperature_violation", False) else 0.0
+        )
         if hour_index in progress_marks:
             completed = hour_index + 1
             percent = completed / len(workload) * 100.0
@@ -1016,6 +1038,10 @@ def _simulate_datacenter_energy_with_env_model(
         "heat_exchanger_aux_power_w": heat_exchanger_aux_power_w,
         "unmet_cooling_load_w": unmet_cooling_load_w,
         "constraint_violation": constraint_violation,
+        "outfall_temperature_violation": outfall_temperature_violation,
+        "seawater_temperature_violation": seawater_temperature_violation,
+        "model_warning_count": len(model_warning_messages),
+        "model_warning_messages": _summarize_model_warning_messages(model_warning_messages),
     }
 
 
@@ -1049,14 +1075,20 @@ def _build_scaled_dc_config(
     max_ambient_temp = float(np.nanmax(ambient_temperature_c))
     _print_progress("Sizing chiller and cooling-tower reference load.", enabled=progress)
     try:
-        with contextlib.redirect_stdout(io.StringIO()):
+        stdout_buffer = io.StringIO()
+        with contextlib.redirect_stdout(stdout_buffer):
             ctafr, ct_rated_load = DataCenter.chiller_sizing(
                 dc_config,
                 min_CRAC_setpoint=15.0,
                 max_CRAC_setpoint=21.6,
                 max_ambient_temp=max_ambient_temp,
             )
-    except Exception:
+        _record_model_stdout_warnings(dc_config, stdout_buffer.getvalue())
+    except Exception as exc:
+        _record_model_stdout_warnings(
+            dc_config,
+            f"WARNING, chiller sizing failed and fallback sizing was used: {exc}",
+        )
         ctafr = dc_config.CT_REFRENCE_AIR_FLOW_RATE
         ct_rated_load = max(dc_config.CT_FAN_REF_P, rated_it_power_w)
     dc_config.CT_REFRENCE_AIR_FLOW_RATE = ctafr
@@ -1067,6 +1099,17 @@ def _build_scaled_dc_config(
 def _print_progress(message: str, enabled: bool = True) -> None:
     if enabled:
         print(f"[progress] {message}", file=sys.stderr, flush=True)
+
+
+def _record_model_stdout_warnings(target: object, stdout_text: str) -> None:
+    messages = [line.strip() for line in stdout_text.splitlines() if line.strip()]
+    if not messages:
+        return
+    existing = list(getattr(target, "_MODEL_WARNING_MESSAGES", []))
+    try:
+        setattr(target, "_MODEL_WARNING_MESSAGES", existing + messages)
+    except Exception:
+        pass
 
 
 def _progress_mark_indices(total: int, intervals: int = 10) -> set[int]:
@@ -1121,13 +1164,15 @@ def _estimate_detailed_it_power_components_w(
         float(np.clip(cpu_load_fraction, 0.0, 1.0) * 100.0)
         for _ in range(dc_config.NUM_RACKS)
     ]
-    with contextlib.redirect_stdout(io.StringIO()):
+    stdout_buffer = io.StringIO()
+    with contextlib.redirect_stdout(stdout_buffer):
         rackwise_cpu_pwr, rackwise_itfan_pwr, _ = (
             dc_model.compute_datacenter_IT_load_outlet_temp(
                 ITE_load_pct_list=ite_load_pct_list,
                 CRAC_setpoint=crac_setpoint_c,
             )
         )
+    _record_model_stdout_warnings(dc_config, stdout_buffer.getvalue())
     return float(sum(rackwise_cpu_pwr)), float(sum(rackwise_itfan_pwr))
 
 
@@ -1169,29 +1214,49 @@ def _finite_mean(values: np.ndarray) -> float:
     return float(np.nanmean(finite_values)) if finite_values.size else math.nan
 
 
+def _summarize_model_warning_messages(messages: Iterable[str], max_messages: int = 5) -> str:
+    unique_messages: list[str] = []
+    total_count = 0
+    for message in messages:
+        total_count += 1
+        if message not in unique_messages and len(unique_messages) < max_messages:
+            unique_messages.append(message)
+    if not unique_messages:
+        return ""
+    summary = "; ".join(unique_messages)
+    if total_count > len(unique_messages):
+        summary = f"{summary}; ... ({total_count} total warnings)"
+    return summary
+
+
 def _format_result(result: DataCenterEnergyResult) -> str:
-    return "\n".join(
-        [
-            f"City: {result.city}",
-            f"Cooling type: {result.cooling_type}",
-            f"Hours: {result.hours}",
-            f"Time alignment: {result.time_alignment}",
-            f"Simulation window: {result.simulation_start_time} to {result.simulation_end_time}",
-            f"IT energy: {result.it_energy_kwh:,.2f} kWh",
-            f"Cooling energy: {result.cooling_energy_kwh:,.2f} kWh",
-            f"Total energy: {result.total_energy_kwh:,.2f} kWh",
-            f"Carbon emissions: {result.carbon_emissions_tco2:,.3f} tCO2",
-            f"Average PUE: {result.average_pue:.3f}",
-            f"Average COP: {result.average_cop:.3f}",
-            (
-                "Source temperature: "
-                f"{result.min_source_temperature_c:.2f}/"
-                f"{result.mean_source_temperature_c:.2f}/"
-                f"{result.max_source_temperature_c:.2f} C "
-                "(min/mean/max)"
-            ),
-        ]
-    )
+    lines = [
+        f"City: {result.city}",
+        f"Cooling type: {result.cooling_type}",
+        f"Hours: {result.hours}",
+        f"Time alignment: {result.time_alignment}",
+        f"Simulation window: {result.simulation_start_time} to {result.simulation_end_time}",
+        f"IT energy: {result.it_energy_kwh:,.2f} kWh",
+        f"Cooling energy: {result.cooling_energy_kwh:,.2f} kWh",
+        f"Total energy: {result.total_energy_kwh:,.2f} kWh",
+        f"Carbon emissions: {result.carbon_emissions_tco2:,.3f} tCO2",
+        f"Average PUE: {result.average_pue:.3f}",
+        f"Average COP: {result.average_cop:.3f}",
+        (
+            "Source temperature: "
+            f"{result.min_source_temperature_c:.2f}/"
+            f"{result.mean_source_temperature_c:.2f}/"
+            f"{result.max_source_temperature_c:.2f} C "
+            "(min/mean/max)"
+        ),
+    ]
+    if result.unmet_cooling_energy_kwh > 0:
+        lines.append(f"Unmet cooling energy: {result.unmet_cooling_energy_kwh:,.2f} kWh")
+    if result.constraint_violation_hours > 0:
+        lines.append(f"Cooling constraint violation hours: {result.constraint_violation_hours:,.0f}")
+    if result.model_warning_count > 0:
+        lines.append(f"Model warnings: {result.model_warning_count} ({result.model_warning_messages})")
+    return "\n".join(lines)
 
 
 def _filename_token(value: str) -> str:

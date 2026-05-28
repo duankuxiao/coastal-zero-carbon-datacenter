@@ -59,6 +59,31 @@ COOLING_METRICS = [
     "required_wind_capacity_mw",
     "wind_annual_generation_mwh",
 ]
+COOLING_DIAGNOSTIC_COLUMNS = [
+    "unmet_cooling_energy_kwh",
+    "constraint_violation_hours",
+    "outfall_temperature_violation_hours",
+    "seawater_temperature_violation_hours",
+    "model_warning_count",
+    "model_warning_messages",
+]
+COOLING_ISSUE_COLUMNS = [
+    "severity",
+    "issue_type",
+    "country",
+    "growth_scenario",
+    "city",
+    "scale",
+    "cooling_type",
+    "hours",
+    "affected_hours",
+    "metric_value",
+    "metric_unit",
+    "facility_count",
+    "facility_capacity_mw",
+    "message",
+    "error_message",
+]
 BASE_METADATA_COLUMNS = [
     "country",
     "growth_scenario",
@@ -448,6 +473,7 @@ def _run_country_growth_cooling_outputs(
     files = {
         "cooling_city_summary_csv": output_path / f"country_growth_cooling_city_summary_{suffix}.csv",
         "cooling_country_summary_csv": output_path / f"country_growth_cooling_country_summary_{suffix}.csv",
+        "cooling_issues_csv": output_path / f"country_growth_cooling_issues_{suffix}.csv",
     }
     if write_debug_scale_results:
         files["cooling_scale_debug_csv"] = output_path / f"country_growth_cooling_scale_debug_{suffix}.csv"
@@ -535,6 +561,11 @@ def _run_country_growth_cooling_outputs(
         )
         _write_cooling_outputs(completed_scale_results, files, write_debug_scale_results)
         print(f"Cooling outputs refreshed after {country}: {files['cooling_country_summary_csv']}", flush=True)
+        _print_cooling_issue_summary(
+            completed_scale_results,
+            context=f"after {country}",
+            issue_file=files["cooling_issues_csv"],
+        )
     return files
 
 
@@ -714,12 +745,213 @@ def _write_cooling_outputs(
         metric_columns=COOLING_METRICS,
         extra_group_columns=["cooling_type", "scale"],
     )
+    cooling_issues = build_cooling_issue_summary(cooling_city_scale)
     cooling_city_summary = build_cooling_comparison_results(cooling_city_results)
     cooling_country_summary = build_cooling_comparison_results(cooling_country_results)
     _write_csv(cooling_city_summary, files["cooling_city_summary_csv"])
     _write_csv(cooling_country_summary, files["cooling_country_summary_csv"])
+    _write_csv(cooling_issues, files["cooling_issues_csv"])
     if write_debug_scale_results and "cooling_scale_debug_csv" in files:
         _write_csv(cooling_city_scale, files["cooling_scale_debug_csv"])
+
+
+def build_cooling_issue_summary(cooling_city_scale: pd.DataFrame) -> pd.DataFrame:
+    """Return one row per cooling problem that can affect result validity."""
+    if cooling_city_scale.empty:
+        return pd.DataFrame(columns=COOLING_ISSUE_COLUMNS)
+    rows: list[dict[str, object]] = []
+    for row in cooling_city_scale.to_dict(orient="records"):
+        rows.extend(_cooling_issue_rows(row))
+    return pd.DataFrame(rows, columns=COOLING_ISSUE_COLUMNS)
+
+
+def _print_cooling_row_issues(row: dict[str, object]) -> None:
+    for issue in _cooling_issue_rows(row):
+        location = " / ".join(
+            str(issue.get(column, ""))
+            for column in ["country", "growth_scenario", "city", "scale", "cooling_type"]
+            if str(issue.get(column, "")).strip()
+        )
+        error = str(issue.get("error_message", "") or "").strip()
+        detail = f"; error={error}" if error else ""
+        print(
+            f"{str(issue['severity']).upper()} {issue['issue_type']}: {location}: "
+            f"{issue['message']}{detail}",
+            flush=True,
+        )
+
+
+def _print_cooling_issue_summary(
+    cooling_city_scale: pd.DataFrame,
+    *,
+    context: str,
+    issue_file: Path,
+) -> None:
+    issues = build_cooling_issue_summary(cooling_city_scale)
+    if issues.empty:
+        print(f"Cooling issue summary {context}: 0 issue(s). Issue table: {issue_file}", flush=True)
+        return
+    severity_counts = ", ".join(
+        f"{severity}={count}" for severity, count in issues["severity"].value_counts().sort_index().items()
+    )
+    type_counts = ", ".join(
+        f"{issue_type}={count}" for issue_type, count in issues["issue_type"].value_counts().sort_index().items()
+    )
+    print(
+        f"Cooling issue summary {context}: {len(issues)} issue(s) "
+        f"({severity_counts}; {type_counts}). Issue table: {issue_file}",
+        flush=True,
+    )
+
+
+def _cooling_issue_rows(row: dict[str, object]) -> list[dict[str, object]]:
+    issues: list[dict[str, object]] = []
+    status = _issue_text(row.get("status")).lower()
+    error_message = _issue_text(row.get("error_message"))
+    if status and status != "ok":
+        issues.append(
+            _cooling_issue_row(
+                row,
+                severity="error",
+                issue_type="task_failed",
+                message="Cooling task failed; no valid result was produced for this row.",
+                error_message=error_message,
+            )
+        )
+
+    warning_count = _issue_float(row.get("model_warning_count"))
+    if warning_count and warning_count > 0:
+        warning_message = _issue_text(row.get("model_warning_messages")) or "Cooling model emitted warnings."
+        issue_type = (
+            "outlet_temperature_warning"
+            if "outlet temperature" in warning_message.lower()
+            else "model_warning"
+        )
+        issues.append(
+            _cooling_issue_row(
+                row,
+                severity="warning",
+                issue_type=issue_type,
+                metric_value=warning_count,
+                metric_unit="warning(s)",
+                message=warning_message,
+            )
+        )
+
+    unmet_kwh = _issue_float(row.get("unmet_cooling_energy_kwh"))
+    if unmet_kwh and unmet_kwh > 1e-9:
+        issues.append(
+            _cooling_issue_row(
+                row,
+                severity="error",
+                issue_type="unmet_cooling_load",
+                metric_value=unmet_kwh,
+                metric_unit="kWh",
+                message="Cooling model reported unmet cooling load; energy and carbon results may be understated.",
+            )
+        )
+
+    specific_constraint_reported = False
+    seawater_temp_hours = _issue_float(row.get("seawater_temperature_violation_hours"))
+    if seawater_temp_hours and seawater_temp_hours > 0:
+        specific_constraint_reported = True
+        issues.append(
+            _cooling_issue_row(
+                row,
+                severity="warning",
+                issue_type="seawater_temperature_violation",
+                affected_hours=seawater_temp_hours,
+                metric_value=seawater_temp_hours,
+                metric_unit="hour(s)",
+                message="Seawater source temperature exceeded the configured valid range.",
+            )
+        )
+
+    outfall_hours = _issue_float(row.get("outfall_temperature_violation_hours"))
+    if outfall_hours and outfall_hours > 0:
+        specific_constraint_reported = True
+        issues.append(
+            _cooling_issue_row(
+                row,
+                severity="warning",
+                issue_type="outfall_temperature_violation",
+                affected_hours=outfall_hours,
+                metric_value=outfall_hours,
+                metric_unit="hour(s)",
+                message="Seawater outfall temperature rise exceeded the configured limit.",
+            )
+        )
+
+    constraint_hours = _issue_float(row.get("constraint_violation_hours"))
+    if constraint_hours and constraint_hours > 0 and not specific_constraint_reported:
+        issues.append(
+            _cooling_issue_row(
+                row,
+                severity="warning",
+                issue_type="cooling_constraint_violation",
+                affected_hours=constraint_hours,
+                metric_value=constraint_hours,
+                metric_unit="hour(s)",
+                message="Cooling model reported constraint violations; detailed violation type is unavailable.",
+            )
+        )
+    return issues
+
+
+def _cooling_issue_row(
+    source: dict[str, object],
+    *,
+    severity: str,
+    issue_type: str,
+    message: str,
+    affected_hours: float | None = None,
+    metric_value: float | None = None,
+    metric_unit: str = "",
+    error_message: str = "",
+) -> dict[str, object]:
+    return {
+        "severity": severity,
+        "issue_type": issue_type,
+        "country": source.get("country", ""),
+        "growth_scenario": source.get("growth_scenario", ""),
+        "city": source.get("city", ""),
+        "scale": source.get("scale", ""),
+        "cooling_type": source.get("cooling_type", ""),
+        "hours": source.get("hours", ""),
+        "affected_hours": "" if affected_hours is None else affected_hours,
+        "metric_value": "" if metric_value is None else metric_value,
+        "metric_unit": metric_unit,
+        "facility_count": source.get("facility_count", ""),
+        "facility_capacity_mw": source.get("facility_capacity_mw", ""),
+        "message": message,
+        "error_message": error_message,
+    }
+
+
+def _issue_float(value: object) -> float | None:
+    if value is None:
+        return None
+    try:
+        if pd.isna(value):
+            return None
+    except (TypeError, ValueError):
+        pass
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
+
+
+def _issue_text(value: object) -> str:
+    if value is None:
+        return ""
+    try:
+        if pd.isna(value):
+            return ""
+    except (TypeError, ValueError):
+        pass
+    return str(value).strip()
 
 
 def _write_optimization_outputs(
@@ -1277,14 +1509,18 @@ def run_cooling_comparisons(
                 rated=wind_rated,
                 cut_out=wind_cut_out,
             )
-            return sequence, _cooling_result_row(
+            result_row = _cooling_result_row(
                 row=row,
                 energy=energy,
                 wind_resource=wind_resource,
                 facility_count=int(allocation["facility_count"]),
             )
+            _print_cooling_row_issues(result_row)
+            return sequence, result_row
         except Exception as exc:
-            return sequence, _failed_row(row, str(exc))
+            failed_row = _failed_row(row, str(exc))
+            _print_cooling_row_issues(failed_row)
+            return sequence, failed_row
 
     return pd.DataFrame(_run_parallel_tasks(tasks, run_task, worker_count))
 
@@ -2000,6 +2236,17 @@ def _cooling_result_row(
             "wind_nc_file": wind_resource.wind_nc_file,
             "wind_start_time": wind_resource.wind_start_time,
             "wind_end_time": wind_resource.wind_end_time,
+            "unmet_cooling_energy_kwh": float(getattr(energy, "unmet_cooling_energy_kwh", 0.0) or 0.0)
+            * multiplier,
+            "constraint_violation_hours": float(getattr(energy, "constraint_violation_hours", 0.0) or 0.0),
+            "outfall_temperature_violation_hours": float(
+                getattr(energy, "outfall_temperature_violation_hours", 0.0) or 0.0
+            ),
+            "seawater_temperature_violation_hours": float(
+                getattr(energy, "seawater_temperature_violation_hours", 0.0) or 0.0
+            ),
+            "model_warning_count": int(getattr(energy, "model_warning_count", 0) or 0),
+            "model_warning_messages": str(getattr(energy, "model_warning_messages", "") or ""),
         }
     )
     return row
@@ -2067,6 +2314,8 @@ def _zero_cooling_row(row: dict[str, object], hours: int | None) -> dict[str, ob
     row.update({"status": "ok", "error_message": "", "hours": hours})
     for metric in COOLING_METRICS:
         row[metric] = 0.0
+    for column in COOLING_DIAGNOSTIC_COLUMNS:
+        row[column] = "" if column == "model_warning_messages" else 0.0
     return row
 
 

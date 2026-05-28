@@ -649,6 +649,8 @@ def calculate_seawater_cooling(
         "source_flow_fraction": float(final_source_loop["flow_fraction"]),
         "load_flow_fraction": final_chilled_loop["flow_fraction"],
         "constraint_violation": bool(final_source_loop["constraint_violation"]),
+        "outfall_temperature_violation": bool(final_source_loop["outfall_temperature_violation"]),
+        "seawater_temperature_violation": bool(final_source_loop["seawater_temperature_violation"]),
         "cop_model": str(heat_pump["cop_model"]),
     }
 
@@ -707,5 +709,7 @@ def default_seawater_cooling_result(seawater_temp: float | None = None) -> dict[
         "source_flow_fraction": 0.0,
         "load_flow_fraction": 0.0,
         "constraint_violation": False,
+        "outfall_temperature_violation": False,
+        "seawater_temperature_violation": False,
         "cop_model": "not_used",
     }

@@ -523,6 +523,8 @@ def calculate_HVAC_power_detailed(CRAC_setpoint, avg_CRAC_return_temp, ambient_t
         "seawater_heat_exchanger_aux_power_w": seawater["heat_exchanger_aux_power_w"],
         "seawater_outfall_temperature_rise_c": seawater["outfall_temperature_rise_c"],
         "seawater_constraint_violation": seawater["constraint_violation"],
+        "seawater_outfall_temperature_violation": seawater["outfall_temperature_violation"],
+        "seawater_temperature_violation": seawater["seawater_temperature_violation"],
         "seawater_cop_model": seawater["cop_model"],
         "cooling_power_savings": conventional_full_power - selected_power,
         "cooling_power_savings_pct": (

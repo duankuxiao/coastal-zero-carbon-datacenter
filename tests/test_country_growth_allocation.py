@@ -260,9 +260,47 @@ def test_cooling_main_function_writes_city_and_country_summaries(
 
     assert output_files["cooling_city_summary_csv"].exists()
     assert output_files["cooling_country_summary_csv"].exists()
+    assert output_files["cooling_issues_csv"].exists()
     city_summary = pd.read_csv(output_files["cooling_city_summary_csv"])
     assert set(city_summary["scale"]) == {"all_scales"}
     assert "total_energy_kwh_savings_vs_air_source" in city_summary.columns
+
+
+def test_cooling_main_function_writes_issue_summary(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(country_growth_allocation_module, "ROOT_DIR", tmp_path / "root")
+
+    def fake_energy(**kwargs):
+        result = _fake_energy_result(kwargs["cooling_type"], kwargs["rated_it_power_kw"])
+        if kwargs["cooling_type"] == "seawater":
+            result.unmet_cooling_energy_kwh = 1.5
+            result.constraint_violation_hours = 2.0
+            result.outfall_temperature_violation_hours = 1.0
+            result.seawater_temperature_violation_hours = 1.0
+            result.model_warning_count = 1
+            result.model_warning_messages = "WARNING, the outlet temperature is higher than 60C: 61.000"
+        return result
+
+    output_files = run_country_growth_cooling_comparison(
+        output_dir=tmp_path / "results",
+        country_rows=_country_rows(country_growth_mw=100.0),
+        city_rows=_city_rows(),
+        scale_rows=_scale_rows(),
+        energy_calculator=fake_energy,
+        wind_calculator=lambda **kwargs: _fake_wind_result(),
+        hours=24,
+        workers=2,
+    )
+
+    issues = pd.read_csv(output_files["cooling_issues_csv"])
+    assert {
+        "unmet_cooling_load",
+        "outfall_temperature_violation",
+        "seawater_temperature_violation",
+        "outlet_temperature_warning",
+    }.issubset(set(issues["issue_type"]))
 
 
 def test_cooling_main_function_reuses_root_cache_for_completed_cities(
