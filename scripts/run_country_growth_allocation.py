@@ -42,7 +42,8 @@ from scripts.run_load_shift_and_battery_optimization import (
     _scenario_configs,
 )
 from utils.tools import (_resolve_baseline_alignment, _resolve_path, _pct, _resolve_output_dir, _hours_token, _number, _row_numeric_value,
-                         _numeric_sum, _numeric_mean, _text, _is_ready, _normalize_column, _row_value)
+                         _numeric_sum, _numeric_mean, _text, _is_ready, _normalize_column, _row_value, _find_column, _capacity_to_mw,
+                         _capacity_unit_from_column, _scenario_label_from_column)
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 CACHE_DIR_NAME = "country_growth_cache"
@@ -2402,16 +2403,6 @@ def _cities_by_country(
     return cities
 
 
-def _find_column(columns: list[str], candidates: list[str], label: str) -> str:
-    normalized = {_normalize_column(column): column for column in columns}
-    for candidate in candidates:
-        if _normalize_column(candidate) in normalized:
-            return normalized[_normalize_column(candidate)]
-    raise ValueError(
-        f"Could not identify {label} column. Available columns: {', '.join(map(str, columns))}"
-    )
-
-
 def _find_optional_column(columns: list[str], candidates: list[str]) -> str | None:
     normalized = {_normalize_column(column): column for column in columns}
     for candidate in candidates:
@@ -2446,31 +2437,6 @@ def _find_2030_capacity_columns(columns: list[str]) -> list[str]:
             f"Found {len(candidates)}: {candidates}"
         )
     return candidates
-
-
-def _capacity_to_mw(value: object, column_name: str) -> float:
-    amount = _number(value, column_name)
-    unit = _capacity_unit_from_column(column_name)
-    if unit == "gw":
-        return amount * 1000.0
-    if unit == "mw":
-        return amount
-    raise ValueError(f"Could not identify MW/GW unit from capacity column {column_name!r}.")
-
-
-def _capacity_unit_from_column(column_name: str) -> str:
-    normalized = _normalize_column(column_name)
-    tokens = set(normalized.split("_"))
-    if "gw" in tokens:
-        return "gw"
-    if "mw" in tokens:
-        return "mw"
-    return ""
-
-
-def _scenario_label_from_column(column_name: str) -> str:
-    label = re.sub(r"(?i).*2030[_\s-]*", "", str(column_name)).strip("_ -")
-    return label or str(column_name)
 
 
 def _normalize_scale(value: object) -> str:
