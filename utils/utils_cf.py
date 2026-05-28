@@ -39,6 +39,7 @@ def obtain_paths(location):
     else:
         raise ValueError(f"Location not found, please define the location {location} on obtain_paths() function in utils_cf.py")
 
+
 def get_energy_variables(state):
     """Obtain energy variables from the energy observation
 
@@ -48,7 +49,7 @@ def get_energy_variables(state):
     Returns:
         List[float]: Subset of the agent_dc observation
     """
-    energy_vars = np.hstack((state[4:7],(state[7]+state[8])/2))
+    energy_vars = np.hstack((state[4:7], (state[7] + state[8]) / 2))
     return energy_vars
 
 
@@ -65,13 +66,13 @@ def get_init_day(start_month=0):
     assert 0 <= start_month <= 11, "start_month should be between 0 and 11 (inclusive, 0-based, 0=January, 11=December)."
 
     # Read the CSV file and parse dates from the 'timestamp' column
-    df = pd.read_csv(PATH+'/data/CarbonIntensity/NY_NG_&_avgCI.csv', parse_dates=['timestamp'], usecols=['timestamp'])
-    
+    df = pd.read_csv(PATH + '/data/CarbonIntensity/NY_NG_&_avgCI.csv', parse_dates=['timestamp'], usecols=['timestamp'])
+
     # Extract the month from each timestamp and add it as a new column to the DataFrame
     df['month'] = pd.DatetimeIndex(df['timestamp']).month
-    
+
     # Find the first day of the specified start month
-    init_day = df[df['month'] == start_month+1].index[0]
-    
+    init_day = df[df['month'] == start_month + 1].index[0]
+
     # Return the day number (0-based)
-    return int(init_day/24)
+    return int(init_day / 24)

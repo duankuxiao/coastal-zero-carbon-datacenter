@@ -4,6 +4,7 @@ from collections import deque
 
 energy_history = deque(maxlen=10000)
 
+
 def update_energy_history(value: float):
     """
     Update the global energy history deque with a new value.
@@ -12,6 +13,7 @@ def update_energy_history(value: float):
         value (float): The new energy value to add.
     """
     energy_history.append(value)
+
 
 def normalize_energy(value: float):
     """
@@ -63,14 +65,15 @@ def default_ls_reward(params: dict) -> float:
     update_energy_history(total_energy)  # Update the energy history deque
     norm_total_energy = normalize_energy(total_energy)  # Normalize using the deque
     norm_ci = params['norm_CI']
-    
+
     footprint_reward = -1.0 * (norm_ci * norm_total_energy / 0.50)  # Mean and std reward. Negate to maximize reward and minimize energy consumption
-    
+
     # Overdue Tasks Penalty (scaled)
     overdue_penalty_scale = 0.3  # Adjust this scaling factor as needed
     overdue_penalty_bias = 0.3
     # tasks_overdue_penalty = -overdue_penalty_scale * np.log(params['ls_overdue_penalty'] + 1) # +1 to avoid log(0) and be always negative
-    tasks_overdue_penalty = -overdue_penalty_scale * np.sqrt(params['ls_overdue_penalty']) + overdue_penalty_bias # To have a +1 if the number of overdue tasks is 0, and a negative value otherwise
+    tasks_overdue_penalty = -overdue_penalty_scale * np.sqrt(
+        params['ls_overdue_penalty']) + overdue_penalty_bias  # To have a +1 if the number of overdue tasks is 0, and a negative value otherwise
     # Oldest Task Age Penalty
     age_penalty_scale = 0.1  # Adjust this scaling factor as needed
     tasks_age_penalty = -age_penalty_scale * params['ls_oldest_task_age']  # Assume normalized between 0 and 1
@@ -100,9 +103,9 @@ def default_dc_reward(params: dict) -> float:
     total_energy = params['bat_total_energy_with_battery_KWh']
     norm_total_energy = normalize_energy(total_energy)  # Normalize using the deque
     norm_ci = params['norm_CI']
-    
+
     footprint_reward = -1.0 * (norm_ci * norm_total_energy / 0.50)  # Mean and std reward. Negate to maximize reward and minimize energy consumption
-    
+
     return footprint_reward
 
 
@@ -124,9 +127,9 @@ def default_bat_reward(params: dict) -> float:
     total_energy = params['bat_total_energy_with_battery_KWh']
     norm_total_energy = normalize_energy(total_energy)  # Normalize using the deque
     norm_ci = params['norm_CI']
-    
+
     footprint_reward = -1.0 * (norm_ci * norm_total_energy / 0.50)  # Mean and std reward. Negate to maximize reward and minimize energy consumption
-    
+
     return footprint_reward
 
 
@@ -141,9 +144,10 @@ def custom_agent_reward(params: dict) -> float:
         float: Custom reward value. Currently returns 0.0 as a placeholder.
     """
     # read reward input parameters from dict object
-    # custom reward calculations 
-    custom_reward = 0.0 # update with custom reward shaping 
+    # custom reward calculations
+    custom_reward = 0.0  # update with custom reward shaping
     return custom_reward
+
 
 # Example of ToU reward based on energy usage and price of electricity
 # ToU reward is based on the ToU (Time of Use) of the agent, which is the amount of the energy time
@@ -163,7 +167,7 @@ def tou_reward(params: dict) -> float:
     Returns:
         float: Reward value.
     """
-    
+
     # ToU dict: {Hour, price}
     tou = {0: 0.25,
            1: 0.25,
@@ -190,12 +194,12 @@ def tou_reward(params: dict) -> float:
            22: 0.25,
            23: 0.25,
            }
-    
+
     # Obtain the price of electricity at the current hour
     current_price = tou[params['hour']]
     # Obtain the energy usage
     energy_usage = params['bat_total_energy_with_battery_KWh']
-    
+
     # The reward is negative as the agent's objective is to minimize energy cost
     tou_reward = -1.0 * energy_usage * current_price
 
@@ -214,13 +218,14 @@ def renewable_energy_reward(params: dict) -> float:
     Returns:
         float: Reward value.
     """
-    assert params.get('renewable_energy_ratio') is not None, 'renewable_energy_ratio is not defined. This parameter should be included using some external dataset and added to the reward_info dictionary'
-    renewable_energy_ratio = params['renewable_energy_ratio'] # This parameter should be included using some external dataset
+    assert params.get(
+        'renewable_energy_ratio') is not None, 'renewable_energy_ratio is not defined. This parameter should be included using some external dataset and added to the reward_info dictionary'
+    renewable_energy_ratio = params['renewable_energy_ratio']  # This parameter should be included using some external dataset
     total_energy_consumption = params['bat_total_energy_with_battery_KWh']
-    factor = 1.0 # factor to scale the weight of the renewable energy usage
+    factor = 1.0  # factor to scale the weight of the renewable energy usage
 
     # Reward = maximize renewable energy usage - minimize total energy consumption
-    reward = factor * renewable_energy_ratio  -1.0 * total_energy_consumption
+    reward = factor * renewable_energy_ratio - 1.0 * total_energy_consumption
     return reward
 
 
@@ -236,9 +241,9 @@ def energy_efficiency_reward(params: dict) -> float:
     Returns:
         float: Reward value.
     """
-    it_equipment_power = params['dc_ITE_total_power_kW']  
-    total_power_consumption = params['dc_total_power_kW']  
-    
+    it_equipment_power = params['dc_ITE_total_power_kW']
+    total_power_consumption = params['dc_total_power_kW']
+
     reward = it_equipment_power / total_power_consumption
     return reward
 
@@ -255,16 +260,16 @@ def energy_PUE_reward(params: dict) -> float:
     Returns:
         float: Reward value.
     """
-    total_power_consumption = params['dc_total_power_kW']  
-    it_equipment_power = params['dc_ITE_total_power_kW']  
-    
+    total_power_consumption = params['dc_total_power_kW']
+    it_equipment_power = params['dc_ITE_total_power_kW']
+
     # Calculate PUE
     pue = total_power_consumption / it_equipment_power if it_equipment_power != 0 else float('inf')
-    
+
     # We aim to get PUE as close to 1 as possible, hence we take the absolute difference between PUE and 1
     # We use a negative sign since RL seeks to maximize reward, but we want to minimize PUE
     reward = -abs(pue - 1)
-    
+
     return reward
 
 
@@ -281,10 +286,10 @@ def temperature_efficiency_reward(params: dict) -> float:
         float: Reward value.
     """
     assert params.get('optimal_temperature_range') is not None, 'optimal_temperature_range is not defined. This parameter should be added to the reward_info dictionary'
-    current_temperature = params['dc_int_temperature'] 
+    current_temperature = params['dc_int_temperature']
     optimal_temperature_range = params['optimal_temperature_range']
     min_temp, max_temp = optimal_temperature_range
-    
+
     if min_temp <= current_temperature <= max_temp:
         reward = 1.0
     else:
@@ -294,10 +299,11 @@ def temperature_efficiency_reward(params: dict) -> float:
             reward = -abs(current_temperature - max_temp)
     return reward
 
+
 def water_usage_efficiency_reward(params: dict) -> float:
     """
     Calculates a reward value based on the efficiency of water usage in the data center.
-    
+
     A lower value of water usage results in a higher reward, promoting sustainability
     and efficiency in water consumption.
 
@@ -306,34 +312,36 @@ def water_usage_efficiency_reward(params: dict) -> float:
             dc_water_usage (float): The amount of water used by the data center in a given period.
 
     Returns:
-        float: Reward value. The reward is higher for lower values of water usage, 
+        float: Reward value. The reward is higher for lower values of water usage,
         promoting reduced water consumption.
     """
     dc_water_usage = params['dc_water_usage']
-    
+
     # Calculate the reward. This is a simple inverse relationship; many other functions could be applied.
     # Adjust the scalar as needed to fit the scale of your rewards or to emphasize the importance of water savings.
     reward = -0.01 * dc_water_usage
-    
+
     return reward
+
 
 # Other reward methods can be added here.
 
 REWARD_METHOD_MAP = {
-    'default_dc_reward' : default_dc_reward,
+    'default_dc_reward': default_dc_reward,
     'default_bat_reward': default_bat_reward,
-    'default_ls_reward' : default_ls_reward,
+    'default_ls_reward': default_ls_reward,
     # Add custom reward methods here
-    'custom_agent_reward' : custom_agent_reward,
-    'tou_reward' : tou_reward,
-    'renewable_energy_reward' : renewable_energy_reward,
-    'energy_efficiency_reward' : energy_efficiency_reward,
-    'energy_PUE_reward' : energy_PUE_reward,
-    'temperature_efficiency_reward' : temperature_efficiency_reward,
-    'water_usage_efficiency_reward' : water_usage_efficiency_reward,
+    'custom_agent_reward': custom_agent_reward,
+    'tou_reward': tou_reward,
+    'renewable_energy_reward': renewable_energy_reward,
+    'energy_efficiency_reward': energy_efficiency_reward,
+    'energy_PUE_reward': energy_PUE_reward,
+    'temperature_efficiency_reward': temperature_efficiency_reward,
+    'water_usage_efficiency_reward': water_usage_efficiency_reward,
 }
 
-def get_reward_method(reward_method : str = 'default_dc_reward'):
+
+def get_reward_method(reward_method: str = 'default_dc_reward'):
     """
     Maps the string identifier to the reward function
 
@@ -344,6 +352,6 @@ def get_reward_method(reward_method : str = 'default_dc_reward'):
         function: Reward function.
     """
     assert reward_method in REWARD_METHOD_MAP.keys(), f"Specified Reward Method {reward_method} not in REWARD_METHOD_MAP"
-    
+
     return REWARD_METHOD_MAP[reward_method]
 

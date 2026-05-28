@@ -42,7 +42,7 @@ from scripts.run_load_shift_and_battery_optimization import (
     _scenario_configs,
 )
 from utils.tools import (_resolve_baseline_alignment, _resolve_path, _pct, _resolve_output_dir, _hours_token, _number, _row_numeric_value,
-                         _numeric_sum, _numeric_mean, _text, _is_ready, _normalize_column)
+                         _numeric_sum, _numeric_mean, _text, _is_ready, _normalize_column, _row_value)
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 CACHE_DIR_NAME = "country_growth_cache"
@@ -1951,12 +1951,6 @@ def _first_matching_row(group: pd.DataFrame, column: str, value: str) -> pd.Seri
 
 def _comparison_metadata(source: pd.Series, group_columns: list[str]) -> dict[str, object]:
     return {column: source[column] for column in group_columns if column in source.index}
-
-
-def _row_value(row: pd.Series | None, column: str, default: object = math.nan) -> object:
-    if row is None or column not in row.index:
-        return default
-    return row[column]
 
 
 def _comparison_status(baseline: pd.Series | None, candidate: pd.Series | None) -> str:

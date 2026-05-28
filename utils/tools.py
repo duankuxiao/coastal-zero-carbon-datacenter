@@ -52,6 +52,12 @@ def _normalize_column(value: object) -> str:
     return token.strip("_")
 
 
+def _row_value(row: pd.Series | None, column: str, default: object = math.nan) -> object:
+    if row is None or column not in row.index:
+        return default
+    return row[column]
+
+
 def _hours_token(hours: int | None) -> str:
     return "all_hours" if hours is None else f"{hours}h"
 

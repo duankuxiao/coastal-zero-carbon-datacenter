@@ -25,7 +25,7 @@ class CustomCallbacks(DefaultCallbacks):
         """
         episode.user_data["net_energy_sum"] = 0
         episode.user_data["CO2_footprint_sum"] = 0
-        
+
         episode.user_data["step_count"] = 0
         episode.user_data["instantaneous_net_energy"] = []
         episode.user_data["load_left"] = 0
@@ -33,7 +33,7 @@ class CustomCallbacks(DefaultCallbacks):
         episode.user_data["ls_tasks_dropped"] = 0
 
         episode.user_data["water_usage"] = 0
-    
+
     def on_episode_step(self, *, worker, base_env, episode, env_index, **kwargs) -> None:
         """
         Method that is called at each step of each episode in the training process. It updates some user_data
@@ -52,14 +52,14 @@ class CustomCallbacks(DefaultCallbacks):
         net_energy = base_env.envs[0].bat_info["bat_total_energy_with_battery_KWh"]
         CO2_footprint = base_env.envs[0].bat_info["bat_CO2_footprint"]
         load_left = base_env.envs[0].ls_info["ls_unasigned_day_load_left"]
-        
+
         tasks_in_queue = base_env.envs[0].ls_info["ls_tasks_in_queue"]
         tasks_dropped = base_env.envs[0].ls_info["ls_tasks_dropped"]
 
         water_usage = base_env.envs[0].dc_info["dc_water_usage"]
-        
+
         episode.user_data["instantaneous_net_energy"].append(net_energy)
-        
+
         episode.user_data["net_energy_sum"] += net_energy
         episode.user_data["CO2_footprint_sum"] += CO2_footprint
         episode.user_data["load_left"] += load_left
@@ -69,7 +69,7 @@ class CustomCallbacks(DefaultCallbacks):
         episode.user_data["water_usage"] += water_usage
 
         episode.user_data["step_count"] += 1
-    
+
     def on_episode_end(self, *, worker, base_env, policies, episode, env_index, **kwargs) -> None:
         """
         Method that is called at the end of each episode in the training process. It calculates some metrics based
@@ -102,7 +102,7 @@ class CustomCallbacks(DefaultCallbacks):
             total_tasks_in_queue = 0
             total_tasks_dropped = 0
             total_water_usage = 0
-        
+
         episode.custom_metrics["average_total_energy_with_battery"] = average_net_energy
         episode.custom_metrics["average_CO2_footprint"] = average_CO2_footprint
         episode.custom_metrics["load_left"] = total_load_left
