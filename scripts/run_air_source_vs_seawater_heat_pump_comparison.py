@@ -35,6 +35,8 @@ from energy.calculate_datacenter_energy import (
     load_city_manifest,
 )
 from renewables.calculate_wind_capacity import WindResourceResult, calculate_wind_resource
+from utils.tools import _pct, _resolve_baseline_alignment, _resolve_path, _output_suffix
+
 
 ROOT_DIR = Path(__file__).resolve().parent
 
@@ -408,17 +410,6 @@ def _build_savings_pct_row(
     return row
 
 
-def _resolve_baseline_alignment(start_time: str | None, time_alignment: str | None) -> str:
-    if start_time:
-        return "start_time"
-    if time_alignment in (None, "sst"):
-        return "sst"
-    raise ValueError(
-        "run_baseline compares air-source and seawater cooling on the SST time window. "
-        "Use --time-alignment sst, or provide --start-time for a custom shared window."
-    )
-
-
 def _valid_nonzero_city_series(
         data: pd.DataFrame,
         city: str,
@@ -436,30 +427,6 @@ def _valid_nonzero_city_series(
     return True, ""
 
 
-def _pct(numerator: float, denominator: object) -> float:
-    denominator_float = float(denominator)
-    if math.isclose(denominator_float, 0.0):
-        return math.nan
-    return numerator / denominator_float * 100.0
-
-
-def _output_suffix(rated_it_power_kw: float, hours: int | None) -> str:
-    power_token = _format_power_token(rated_it_power_kw)
-    hours_token = "all_hours" if hours is None else f"{hours}h"
-    return f"{power_token}_{hours_token}"
-
-
-def _format_power_token(rated_it_power_kw: float) -> str:
-    if float(rated_it_power_kw).is_integer():
-        return f"{int(rated_it_power_kw)}kW"
-    return f"{rated_it_power_kw:g}kW".replace(".", "p")
-
-
-def _resolve_path(path: str) -> Path:
-    resolved = Path(path)
-    if not resolved.is_absolute():
-        resolved = ROOT_DIR / resolved
-    return resolved
 
 
 def main() -> None:
@@ -508,7 +475,7 @@ def main() -> None:
     args = parser.parse_args()
 
     run_baseline(
-        workload_file=_resolve_path(args.workload_file),
+        workload_file=_resolve_path(args.workload_file, ROOT_DIR),
         rated_it_power_kw=args.rated_it_power_kw,
         idle_power_fraction=args.idle_power_fraction,
         hours=args.hours,

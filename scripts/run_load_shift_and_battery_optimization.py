@@ -27,7 +27,7 @@ import pandas as pd
 from energy.calculate_datacenter_energy import WORKLOAD_FILE, load_city_manifest
 from optimization.optimize_zero_carbon import optimization
 from renewables.calculate_wind_capacity import calculate_required_wind_capacity
-
+from utils.tools import _pct, _hours_token, _metric_savings, _resolve_output_dir, _filename_token
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 DEFAULT_OUTPUT_DIR = ROOT_DIR / "results"
@@ -99,7 +99,7 @@ def run_optimizations(
     output_dir: str | Path = DEFAULT_OUTPUT_DIR,
 ) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, Path]]:
     """Run optimization for all toolkit-ready cities and save aggregate CSVs."""
-    output_path = _resolve_output_dir(output_dir)
+    output_path = _resolve_output_dir(output_dir, ROOT_DIR)
     objective_list = tuple(objectives)
     city_rows = load_city_manifest()
 
@@ -556,21 +556,6 @@ def _add_baseline_savings(row: dict[str, object], baseline: dict[str, object]) -
     row["grid_purchase_savings_pct_vs_baseline"] = _pct(grid_savings, baseline.get("grid_purchase_mwh", 0.0))
 
 
-def _metric_savings(
-    baseline: dict[str, object],
-    other: dict[str, object],
-    metric: str,
-) -> float:
-    return float(baseline.get(metric, 0.0) or 0.0) - float(other.get(metric, 0.0) or 0.0)
-
-
-def _pct(numerator: float, denominator: object) -> float:
-    denominator_float = float(denominator or 0.0)
-    if math.isclose(denominator_float, 0.0):
-        return math.nan
-    return numerator / denominator_float * 100.0
-
-
 def _wind_coverage_mwh(row: dict[str, object]) -> float:
     demand = float(row.get("annual_demand_mwh", row.get("datacenter_total_energy_mwh", 0.0)) or 0.0)
     grid_purchase = float(row.get("grid_purchase_mwh", 0.0) or 0.0)
@@ -585,23 +570,6 @@ def _battery_required_capacity_mwh(result: dict[str, object]) -> float:
     if values.empty:
         return 0.0
     return float(values.max() - values.min())
-
-
-def _resolve_output_dir(path: str | Path) -> Path:
-    output_path = Path(path)
-    if not output_path.is_absolute():
-        output_path = ROOT_DIR / output_path
-    output_path.mkdir(parents=True, exist_ok=True)
-    return output_path
-
-
-def _filename_token(value: str) -> str:
-    token = re.sub(r"[^A-Za-z0-9]+", "_", str(value).strip())
-    return token.strip("_") or "unknown"
-
-
-def _hours_token(hours: int | None) -> str:
-    return "all_hours" if hours is None else f"{hours}h"
 
 
 def main() -> None:

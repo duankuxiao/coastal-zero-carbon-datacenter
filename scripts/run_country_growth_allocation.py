@@ -41,7 +41,8 @@ from scripts.run_load_shift_and_battery_optimization import (
     SCENARIO_LABELS as OPTIMIZATION_SCENARIO_LABELS,
     _scenario_configs,
 )
-
+from utils.tools import (_resolve_baseline_alignment, _resolve_path, _pct, _resolve_output_dir, _hours_token, _number, _row_numeric_value,
+                         _numeric_sum, _numeric_mean, _text, _is_ready, _normalize_column)
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 CACHE_DIR_NAME = "country_growth_cache"
@@ -173,7 +174,7 @@ def run_country_growth_allocation(
 ) -> dict[str, Path]:
     """Run country-growth allocation and write CSV outputs."""
     run_mode = _normalize_mode(mode)
-    manifest_path = _resolve_path(manifest_file)
+    manifest_path = _resolve_path(manifest_file,ROOT_DIR)
     output_path = _resolve_output_dir(output_dir)
     worker_count = _normalize_workers(workers)
     if country_rows is None:
@@ -469,7 +470,7 @@ def _run_country_growth_cooling_outputs(
     write_debug_scale_results: bool,
 ) -> dict[str, Path]:
     suffix = _hours_token(hours)
-    resolved_time_alignment = _baseline_time_alignment(start_time, time_alignment)
+    resolved_time_alignment = _resolve_baseline_alignment(start_time, time_alignment)
     files = {
         "cooling_city_summary_csv": output_path / f"country_growth_cooling_city_summary_{suffix}.csv",
         "cooling_country_summary_csv": output_path / f"country_growth_cooling_country_summary_{suffix}.csv",
@@ -1919,7 +1920,7 @@ def _build_pairwise_comparison_results(
                 row[f"{baseline_prefix}_{metric}"] = baseline_metric
                 row[f"{metric_candidate_prefix}_{metric}"] = candidate_metric
                 row[f"{metric}_savings_{savings_suffix}"] = savings
-                row[f"{metric}_savings_pct_{savings_suffix}"] = _pct_savings(savings, baseline_metric)
+                row[f"{metric}_savings_pct_{savings_suffix}"] = _pct(savings, baseline_metric)
             rows.append(row)
     return pd.DataFrame(rows)
 
@@ -1958,15 +1959,6 @@ def _row_value(row: pd.Series | None, column: str, default: object = math.nan) -
     return row[column]
 
 
-def _row_numeric_value(row: pd.Series | None, column: str) -> float:
-    if row is None or column not in row.index:
-        return math.nan
-    try:
-        return float(row[column])
-    except Exception:
-        return math.nan
-
-
 def _comparison_status(baseline: pd.Series | None, candidate: pd.Series | None) -> str:
     if baseline is None or candidate is None:
         return "failed"
@@ -1985,12 +1977,6 @@ def _comparison_error_message(baseline: pd.Series | None, candidate: pd.Series |
         if message:
             errors.append(f"{label}: {message}")
     return "; ".join(errors)
-
-
-def _pct_savings(savings: float, baseline: float) -> float:
-    if not math.isfinite(savings) or not math.isfinite(baseline) or math.isclose(baseline, 0.0):
-        return math.nan
-    return savings / baseline * 100.0
 
 
 def _get_energy_result(
@@ -2352,19 +2338,6 @@ def _aggregate_country_metric(group: pd.DataFrame, metric: str) -> float:
     return float(values.mean()) if values.notna().any() else math.nan
 
 
-def _numeric_sum(group: pd.DataFrame, column: str) -> float:
-    if column not in group:
-        return 0.0
-    return float(pd.to_numeric(group[column], errors="coerce").fillna(0.0).sum())
-
-
-def _numeric_mean(group: pd.DataFrame, column: str) -> float:
-    if column not in group:
-        return math.nan
-    values = pd.to_numeric(group[column], errors="coerce")
-    return float(values.mean()) if values.notna().any() else math.nan
-
-
 def _combined_status(group: pd.DataFrame) -> str:
     if "status" not in group:
         return ""
@@ -2515,57 +2488,6 @@ def _normalize_scale(value: object) -> str:
     if normalized in aliases:
         return aliases[normalized]
     raise ValueError(f"Unknown data-center scale value: {value!r}")
-
-
-def _number(value: object, label: str) -> float:
-    try:
-        number = float(value)
-    except Exception as exc:
-        raise ValueError(f"{label} must be numeric; got {value!r}.") from exc
-    if not math.isfinite(number):
-        raise ValueError(f"{label} must be finite; got {value!r}.")
-    return number
-
-
-def _text(value: object) -> str:
-    if value is None or pd.isna(value):
-        return ""
-    return str(value).strip()
-
-
-def _is_ready(value: object) -> bool:
-    return str(value).strip().lower() in {"1", "true", "yes", "y"}
-
-
-def _normalize_column(value: object) -> str:
-    token = str(value).replace("\ufeff", "").strip().lower()
-    token = re.sub(r"[^a-z0-9]+", "_", token)
-    return token.strip("_")
-
-
-def _resolve_path(path: str | Path) -> Path:
-    resolved = Path(path)
-    if not resolved.is_absolute():
-        resolved = ROOT_DIR / resolved
-    return resolved
-
-
-def _resolve_output_dir(path: str | Path) -> Path:
-    output_path = _resolve_path(path)
-    output_path.mkdir(parents=True, exist_ok=True)
-    return output_path
-
-
-def _baseline_time_alignment(start_time: str | None, time_alignment: str | None) -> str | None:
-    if start_time:
-        return "start_time"
-    if time_alignment in (None, "sst"):
-        return "sst"
-    return time_alignment
-
-
-def _hours_token(hours: int | None) -> str:
-    return "all_hours" if hours is None else f"{hours}h"
 
 
 def _build_arg_parser() -> argparse.ArgumentParser:
