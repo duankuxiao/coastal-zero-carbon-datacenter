@@ -1,6 +1,6 @@
 import pytest
 
-from energy.seawater_heat_pump import heat_pump_chiller
+from energy.seawater_heat_pump import heat_pump_chiller, seawater_intake_loop
 
 
 class _Config:
@@ -51,3 +51,48 @@ def test_explicit_undersized_heat_pump_still_reports_unmet_load():
 
     assert result["cooling_load_served_w"] < 100_000.0
     assert result["unmet_cooling_load_w"] > 0.0
+
+
+class _SeawaterLoopConfig:
+    SEAWATER_DENSITY_KG_PER_M3 = 1025.0
+    SEAWATER_CP_J_PER_KG_K = 3990.0
+    SEAWATER_DELTA_T_C = 5.0
+    SEAWATER_MAX_OUTFALL_TEMPERATURE_RISE_C = 3.0
+    SEAWATER_MIN_FLOW_M3_S = 0.02
+    SEAWATER_MAX_FLOW_M3_S = 3.0
+    SEAWATER_MAX_FLOW_PER_UNIT_M3_S = 3.0
+    SEAWATER_HEAT_EXCHANGER_UNIT_COUNT = 1
+    SEAWATER_AUTO_SIZE_FLOW = True
+    SEAWATER_FIXED_PRESSURE_DROP_PA = 250000.0
+    SEAWATER_PUMP_EFFICIENCY = 0.80
+    SEAWATER_VARIABLE_SPEED_PUMP = True
+
+
+def test_autosized_source_loop_adds_units_to_meet_outfall_limit():
+    heat_rejection_w = 80_000_000.0
+
+    result = seawater_intake_loop(
+        heat_rejection_w=heat_rejection_w,
+        source_entering_temp_c=20.0,
+        config=_SeawaterLoopConfig(),
+    )
+
+    assert result["flow_m3_s"] == pytest.approx(result["required_flow_m3_s"])
+    assert result["outfall_temperature_rise_c"] <= _SeawaterLoopConfig.SEAWATER_MAX_OUTFALL_TEMPERATURE_RISE_C
+    assert result["outfall_temperature_violation"] is False
+    assert result["heat_exchange_unit_count"] > 1
+    assert result["flow_per_unit_m3_s"] <= _SeawaterLoopConfig.SEAWATER_MAX_FLOW_PER_UNIT_M3_S
+
+
+def test_fixed_source_loop_reports_violation_when_absolute_flow_cap_is_too_small():
+    class FixedFlowConfig(_SeawaterLoopConfig):
+        SEAWATER_AUTO_SIZE_FLOW = False
+
+    result = seawater_intake_loop(
+        heat_rejection_w=80_000_000.0,
+        source_entering_temp_c=20.0,
+        config=FixedFlowConfig(),
+    )
+
+    assert result["flow_m3_s"] == pytest.approx(FixedFlowConfig.SEAWATER_MAX_FLOW_M3_S)
+    assert result["outfall_temperature_violation"] is True

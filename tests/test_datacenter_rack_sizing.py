@@ -39,3 +39,28 @@ def test_medium_facility_uses_weighted_physical_rack_count():
     assert "outlet temperature is higher than 60C" not in "; ".join(
         getattr(config, "_MODEL_WARNING_MESSAGES", [])
     )
+
+
+def test_large_seawater_facility_autosizes_flow_and_heat_exchanger_units():
+    rated_it_power_kw = 100_000.0
+
+    config = _build_scaled_dc_config(
+        rated_it_power_kw=rated_it_power_kw,
+        cooling_type="seawater",
+        ambient_temperature_c=np.array([35.0]),
+        crac_setpoint_c=18.0,
+        progress=False,
+    )
+
+    expected_units = math.ceil(
+        config.SEAWATER_DESIGN_REQUIRED_FLOW_M3_S
+        / config.SEAWATER_MAX_FLOW_PER_UNIT_M3_S
+    )
+    assert config.SEAWATER_HEAT_EXCHANGER_UNIT_COUNT == expected_units
+    assert config.SEAWATER_MAX_FLOW_M3_S == pytest.approx(
+        config.SEAWATER_MAX_FLOW_PER_UNIT_M3_S * expected_units
+    )
+    assert config.SEAWATER_DESIGN_FLOW_M3_S >= config.SEAWATER_DESIGN_REQUIRED_FLOW_M3_S
+    assert config.SEAWATER_HEAT_EXCHANGER_UA_W_PER_K == pytest.approx(
+        config.SEAWATER_HEAT_EXCHANGER_UA_PER_UNIT_W_PER_K * expected_units
+    )

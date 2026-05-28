@@ -34,6 +34,15 @@ def _as_float(value: Any, default: float) -> float:
         return default
 
 
+def _as_int(value: Any, default: int) -> int:
+    try:
+        if value is None:
+            return default
+        return int(math.ceil(float(value)))
+    except (TypeError, ValueError, OverflowError):
+        return default
+
+
 def _as_bool(value: Any, default: bool = False) -> bool:
     if isinstance(value, bool):
         return value
@@ -163,17 +172,42 @@ def seawater_intake_loop(
         0.1,
     )
     min_flow_m3_s = max(_as_float(_cfg(config, "SEAWATER_MIN_FLOW_M3_S", 0.0), 0.0), 0.0)
-    max_flow_m3_s = max(
+    configured_max_flow_m3_s = max(
         _as_float(_cfg(config, "SEAWATER_MAX_FLOW_M3_S", math.inf), math.inf),
         min_flow_m3_s,
     )
+    max_flow_per_unit_m3_s = max(
+        _as_float(
+            _cfg(config, "SEAWATER_MAX_FLOW_PER_UNIT_M3_S", configured_max_flow_m3_s),
+            configured_max_flow_m3_s,
+        ),
+        min_flow_m3_s,
+        1e-12,
+    )
+    configured_unit_count = max(_as_int(_cfg(config, "SEAWATER_HEAT_EXCHANGER_UNIT_COUNT", 1), 1), 1)
+    autosize_flow = _as_bool(_cfg(config, "SEAWATER_AUTO_SIZE_FLOW", True), True)
 
     if heat_w <= 0:
+        required_flow_m3_s = 0.0
         flow_m3_s = 0.0
+        heat_exchange_unit_count = configured_unit_count
+        max_flow_m3_s = (
+            max_flow_per_unit_m3_s * heat_exchange_unit_count
+            if autosize_flow and math.isfinite(max_flow_per_unit_m3_s)
+            else configured_max_flow_m3_s
+        )
     else:
         flow_for_design_delta = heat_w / (density * cp * design_delta_t_c)
         flow_for_outfall_limit = heat_w / (density * cp * max_rise_c)
-        flow_m3_s = max(flow_for_design_delta, flow_for_outfall_limit, min_flow_m3_s)
+        required_flow_m3_s = max(flow_for_design_delta, flow_for_outfall_limit, min_flow_m3_s)
+        if autosize_flow and math.isfinite(max_flow_per_unit_m3_s):
+            required_units = int(math.ceil(required_flow_m3_s / max_flow_per_unit_m3_s))
+            heat_exchange_unit_count = max(configured_unit_count, required_units, 1)
+            max_flow_m3_s = max_flow_per_unit_m3_s * heat_exchange_unit_count
+        else:
+            heat_exchange_unit_count = configured_unit_count
+            max_flow_m3_s = configured_max_flow_m3_s
+        flow_m3_s = required_flow_m3_s
         flow_m3_s = min(flow_m3_s, max_flow_m3_s)
 
     outfall_rise_c = heat_w / (density * cp * flow_m3_s) if flow_m3_s > 0 else 0.0
@@ -210,6 +244,12 @@ def seawater_intake_loop(
         "source_leaving_temp_c": source_temp_c + outfall_rise_c,
         "flow_m3_s": flow_m3_s,
         "design_flow_m3_s": design_flow_m3_s,
+        "required_flow_m3_s": required_flow_m3_s,
+        "max_flow_m3_s": max_flow_m3_s,
+        "max_flow_per_unit_m3_s": max_flow_per_unit_m3_s,
+        "flow_per_unit_m3_s": flow_m3_s / heat_exchange_unit_count if heat_exchange_unit_count > 0 else 0.0,
+        "heat_exchange_unit_count": float(heat_exchange_unit_count),
+        "auto_sized_flow": bool(autosize_flow),
         "flow_fraction": flow_fraction,
         "pressure_drop_pa": pressure_drop_pa,
         "pump_efficiency": pump_efficiency,
@@ -274,6 +314,7 @@ def plate_heat_exchanger(
     seawater_flow_m3_s: float,
     chilled_water_flow_m3_s: float,
     config: Any,
+    heat_exchange_unit_count: float | int | None = None,
 ) -> dict[str, float]:
     """Calculate heat-exchanger capacity with effectiveness-NTU or configured effectiveness."""
     load_w = max(float(cooling_load_w), 0.0)
@@ -299,7 +340,7 @@ def plate_heat_exchanger(
     c_min = min(c_source_w_per_k, c_load_w_per_k)
     c_max = max(c_source_w_per_k, c_load_w_per_k)
     capacity_rate_ratio = c_min / c_max if c_max > 0 else 0.0
-    ua_w_per_k = _as_float(_cfg(config, "SEAWATER_HEAT_EXCHANGER_UA_W_PER_K", 0.0), 0.0)
+    ua_w_per_k = _heat_exchanger_ua_w_per_k(config, heat_exchange_unit_count)
     fouling_factor = max(_as_float(_cfg(config, "SEAWATER_FOULING_FACTOR_M2K_PER_W", 0.0), 0.0), 0.0)
     if ua_w_per_k > 0:
         ua_effective = ua_w_per_k / (1.0 + ua_w_per_k * fouling_factor)
@@ -329,6 +370,23 @@ def plate_heat_exchanger(
         "chilled_water_leaving_temp_c": chilled_water_leaving_temp_c,
         "approach_temperature_c": chilled_water_leaving_temp_c - source_leaving_temp_c,
     }
+
+
+def _heat_exchanger_ua_w_per_k(config: Any, heat_exchange_unit_count: float | int | None) -> float:
+    unit_count = max(_as_int(heat_exchange_unit_count, 1), 1)
+    configured_ua = _as_float(_cfg(config, "SEAWATER_HEAT_EXCHANGER_UA_W_PER_K", 0.0), 0.0)
+    per_unit_ua = _cfg(config, "SEAWATER_HEAT_EXCHANGER_UA_PER_UNIT_W_PER_K", None)
+    if per_unit_ua is not None:
+        return max(_as_float(per_unit_ua, 0.0), 0.0) * unit_count
+
+    autosize_hx = _as_bool(
+        _cfg(config, "SEAWATER_AUTO_SIZE_HEAT_EXCHANGERS", _cfg(config, "SEAWATER_AUTO_SIZE_FLOW", True)),
+        True,
+    )
+    base_unit_count = max(_as_int(_cfg(config, "SEAWATER_BASE_HEAT_EXCHANGER_UNIT_COUNT", 1), 1), 1)
+    if autosize_hx and configured_ua > 0 and unit_count > base_unit_count:
+        return configured_ua * unit_count / base_unit_count
+    return max(configured_ua, 0.0)
 
 
 def heat_pump_chiller(
@@ -574,6 +632,7 @@ def calculate_seawater_cooling(
         seawater_flow_m3_s=float(candidate_source_loop["flow_m3_s"]),
         chilled_water_flow_m3_s=full_load_chilled_loop["flow_m3_s"],
         config=DC_Config,
+        heat_exchange_unit_count=float(candidate_source_loop["heat_exchange_unit_count"]),
     )
 
     previous_mode = _cfg(DC_Config, "_SEAWATER_PREVIOUS_MODE", None)
@@ -651,6 +710,11 @@ def calculate_seawater_cooling(
         "heat_exchanger_aux_power_w": heat_exchanger_aux_power_w,
         "chilled_water_pump_power_w": final_chilled_loop["pump_power_w"],
         "seawater_flow_rate_m3_s": float(final_source_loop["flow_m3_s"]),
+        "seawater_required_flow_rate_m3_s": float(final_source_loop["required_flow_m3_s"]),
+        "seawater_max_flow_rate_m3_s": float(final_source_loop["max_flow_m3_s"]),
+        "seawater_max_flow_per_unit_m3_s": float(final_source_loop["max_flow_per_unit_m3_s"]),
+        "seawater_flow_per_unit_m3_s": float(final_source_loop["flow_per_unit_m3_s"]),
+        "seawater_heat_exchange_unit_count": float(final_source_loop["heat_exchange_unit_count"]),
         "total_power": total_power_w,
         "available_capacity_w": free_cooling_served_w + float(heat_pump["available_capacity_w"]),
         "heat_exchanger_capacity_w": heat_exchanger["capacity_w"],
@@ -711,6 +775,11 @@ def default_seawater_cooling_result(seawater_temp: float | None = None) -> dict[
         "heat_exchanger_aux_power_w": 0.0,
         "chilled_water_pump_power_w": 0.0,
         "seawater_flow_rate_m3_s": 0.0,
+        "seawater_required_flow_rate_m3_s": 0.0,
+        "seawater_max_flow_rate_m3_s": 0.0,
+        "seawater_max_flow_per_unit_m3_s": 0.0,
+        "seawater_flow_per_unit_m3_s": 0.0,
+        "seawater_heat_exchange_unit_count": 0.0,
         "total_power": 0.0,
         "available_capacity_w": 0.0,
         "heat_exchanger_capacity_w": 0.0,

@@ -67,6 +67,8 @@ COOLING_DIAGNOSTIC_COLUMNS = [
     "constraint_violation_hours",
     "outfall_temperature_violation_hours",
     "seawater_temperature_violation_hours",
+    "max_seawater_flow_rate_m3_s",
+    "max_seawater_heat_exchange_unit_count",
     "model_warning_count",
     "model_warning_messages",
 ]
@@ -2274,6 +2276,12 @@ def _cooling_result_row(
             ),
             "seawater_temperature_violation_hours": float(
                 getattr(energy, "seawater_temperature_violation_hours", 0.0) or 0.0
+            ),
+            "max_seawater_flow_rate_m3_s": float(
+                getattr(energy, "max_seawater_flow_rate_m3_s", 0.0) or 0.0
+            ),
+            "max_seawater_heat_exchange_unit_count": float(
+                getattr(energy, "max_seawater_heat_exchange_unit_count", 0.0) or 0.0
             ),
             "model_warning_count": int(getattr(energy, "model_warning_count", 0) or 0),
             "model_warning_messages": str(getattr(energy, "model_warning_messages", "") or ""),

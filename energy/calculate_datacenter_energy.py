@@ -50,6 +50,7 @@ DEFAULT_OUTPUT_DIR = ROOT_DIR / "results"
 XLSX_NS = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
 XLSX_REL_ID = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id"
 DEFAULT_TARGET_RACK_IT_POWER_W = 50_000.0
+DEFAULT_SEAWATER_DESIGN_HEAT_REJECTION_FACTOR = 1.25
 
 
 def _clean_header(value: object) -> str:
@@ -224,6 +225,8 @@ class DataCenterEnergyResult:
     constraint_violation_hours: float
     outfall_temperature_violation_hours: float = 0.0
     seawater_temperature_violation_hours: float = 0.0
+    max_seawater_flow_rate_m3_s: float = 0.0
+    max_seawater_heat_exchange_unit_count: float = 0.0
     model_warning_count: int = 0
     model_warning_messages: str = ""
 
@@ -397,6 +400,8 @@ def calculate_data_center_energy(
         constraint_violation_hours=float(np.nansum(simulation["constraint_violation"])),
         outfall_temperature_violation_hours=float(np.nansum(simulation["outfall_temperature_violation"])),
         seawater_temperature_violation_hours=float(np.nansum(simulation["seawater_temperature_violation"])),
+        max_seawater_flow_rate_m3_s=float(np.nanmax(simulation["seawater_flow_rate_m3_s"])),
+        max_seawater_heat_exchange_unit_count=float(np.nanmax(simulation["seawater_heat_exchange_unit_count"])),
         model_warning_count=int(simulation["model_warning_count"]),
         model_warning_messages=str(simulation["model_warning_messages"]),
     )
@@ -950,6 +955,8 @@ def _simulate_datacenter_energy_with_env_model(
     seawater_effective_cop = np.full_like(workload, np.nan, dtype=float)
     seawater_compressor_cop = np.full_like(workload, np.nan, dtype=float)
     seawater_pump_power_w = np.zeros_like(workload, dtype=float)
+    seawater_flow_rate_m3_s = np.zeros_like(workload, dtype=float)
+    seawater_heat_exchange_unit_count = np.zeros_like(workload, dtype=float)
     chilled_water_pump_power_w = np.zeros_like(workload, dtype=float)
     compressor_power_w = np.zeros_like(workload, dtype=float)
     heat_exchanger_aux_power_w = np.zeros_like(workload, dtype=float)
@@ -1006,6 +1013,10 @@ def _simulate_datacenter_energy_with_env_model(
         seawater_effective_cop[hour_index] = float(hvac_details.get("seawater_effective_cop", math.nan))
         seawater_compressor_cop[hour_index] = float(hvac_details.get("seawater_compressor_cop", math.nan))
         seawater_pump_power_w[hour_index] = float(hvac_details.get("seawater_pump_power", 0.0))
+        seawater_flow_rate_m3_s[hour_index] = float(hvac_details.get("seawater_flow_rate_m3_s", 0.0))
+        seawater_heat_exchange_unit_count[hour_index] = float(
+            hvac_details.get("seawater_heat_exchange_unit_count", 0.0)
+        )
         chilled_water_pump_power_w[hour_index] = float(hvac_details.get("seawater_chilled_water_pump_power_w", 0.0))
         compressor_power_w[hour_index] = float(hvac_details.get("seawater_compressor_power_w", 0.0))
         heat_exchanger_aux_power_w[hour_index] = float(hvac_details.get("seawater_heat_exchanger_aux_power_w", 0.0))
@@ -1035,6 +1046,8 @@ def _simulate_datacenter_energy_with_env_model(
         "seawater_effective_cop": seawater_effective_cop,
         "seawater_compressor_cop": seawater_compressor_cop,
         "seawater_pump_power_w": seawater_pump_power_w,
+        "seawater_flow_rate_m3_s": seawater_flow_rate_m3_s,
+        "seawater_heat_exchange_unit_count": seawater_heat_exchange_unit_count,
         "chilled_water_pump_power_w": chilled_water_pump_power_w,
         "compressor_power_w": compressor_power_w,
         "heat_exchanger_aux_power_w": heat_exchanger_aux_power_w,
@@ -1068,6 +1081,8 @@ def _build_scaled_dc_config(
         "seawater" if cooling_type == "seawater" else "conventional_full"
     )
     _configure_scaled_rack_layout(dc_config, rated_it_power_w)
+    if cooling_type == "seawater":
+        _configure_scaled_seawater_system(dc_config, rated_it_power_w)
     dc_config.RACK_CPU_CONFIG = _expand_rack_cpu_config_to_capacity(
         dc_config.RACK_CPU_CONFIG,
         dc_config.MAX_W_PER_RACK,
@@ -1155,6 +1170,121 @@ def _repeat_rack_cpu_config_to_length(
         template = rack_cpu_config[index % len(rack_cpu_config)]
         repeated.append([dict(cpu) for cpu in template])
     return repeated
+
+
+def _configure_scaled_seawater_system(dc_config: DC_Config, rated_it_power_w: float) -> None:
+    """Size seawater flow and heat-exchanger units for the requested facility load."""
+    auto_size_flow = _config_bool(getattr(dc_config, "SEAWATER_AUTO_SIZE_FLOW", True), True)
+    auto_size_hx = _config_bool(
+        getattr(dc_config, "SEAWATER_AUTO_SIZE_HEAT_EXCHANGERS", auto_size_flow),
+        auto_size_flow,
+    )
+    if not auto_size_flow and not auto_size_hx:
+        return
+
+    density = max(_config_float(getattr(dc_config, "SEAWATER_DENSITY_KG_PER_M3", 1025.0), 1025.0), 1.0)
+    cp = max(_config_float(getattr(dc_config, "SEAWATER_CP_J_PER_KG_K", 3990.0), 3990.0), 1.0)
+    design_delta_t_c = max(_config_float(getattr(dc_config, "SEAWATER_DELTA_T_C", 5.0), 5.0), 0.1)
+    max_rise_c = max(
+        _config_float(
+            getattr(dc_config, "SEAWATER_MAX_OUTFALL_TEMPERATURE_RISE_C", design_delta_t_c),
+            design_delta_t_c,
+        ),
+        0.1,
+    )
+    min_flow_m3_s = max(_config_float(getattr(dc_config, "SEAWATER_MIN_FLOW_M3_S", 0.0), 0.0), 0.0)
+    design_factor = max(
+        _config_float(
+            getattr(
+                dc_config,
+                "SEAWATER_DESIGN_HEAT_REJECTION_FACTOR",
+                DEFAULT_SEAWATER_DESIGN_HEAT_REJECTION_FACTOR,
+            ),
+            DEFAULT_SEAWATER_DESIGN_HEAT_REJECTION_FACTOR,
+        ),
+        1.0,
+    )
+    design_heat_rejection_w = rated_it_power_w * design_factor
+    required_flow_m3_s = max(
+        design_heat_rejection_w / (density * cp * design_delta_t_c),
+        design_heat_rejection_w / (density * cp * max_rise_c),
+        min_flow_m3_s,
+    )
+
+    configured_max_flow_m3_s = max(
+        _config_float(getattr(dc_config, "SEAWATER_MAX_FLOW_M3_S", math.inf), math.inf),
+        min_flow_m3_s,
+    )
+    per_unit_flow_m3_s = max(
+        _config_float(
+            getattr(dc_config, "SEAWATER_MAX_FLOW_PER_UNIT_M3_S", configured_max_flow_m3_s),
+            configured_max_flow_m3_s,
+        ),
+        min_flow_m3_s,
+        1e-12,
+    )
+    configured_unit_count = max(_config_int(getattr(dc_config, "SEAWATER_HEAT_EXCHANGER_UNIT_COUNT", 1), 1), 1)
+    if math.isfinite(per_unit_flow_m3_s):
+        design_unit_count = max(
+            configured_unit_count,
+            int(math.ceil(required_flow_m3_s / per_unit_flow_m3_s)),
+            1,
+        )
+        aggregate_max_flow_m3_s = per_unit_flow_m3_s * design_unit_count
+    else:
+        design_unit_count = configured_unit_count
+        aggregate_max_flow_m3_s = configured_max_flow_m3_s
+
+    dc_config.SEAWATER_MAX_FLOW_PER_UNIT_M3_S = per_unit_flow_m3_s
+    dc_config.SEAWATER_HEAT_EXCHANGER_UNIT_COUNT = design_unit_count
+    dc_config.SEAWATER_MAX_FLOW_M3_S = aggregate_max_flow_m3_s
+    dc_config.SEAWATER_DESIGN_FLOW_M3_S = max(
+        _config_float(getattr(dc_config, "SEAWATER_DESIGN_FLOW_M3_S", 0.0), 0.0),
+        required_flow_m3_s,
+    )
+    dc_config.SEAWATER_DESIGN_HEAT_REJECTION_W = design_heat_rejection_w
+    dc_config.SEAWATER_DESIGN_REQUIRED_FLOW_M3_S = required_flow_m3_s
+
+    if auto_size_hx:
+        per_unit_ua_w_per_k = _config_float(
+            getattr(
+                dc_config,
+                "SEAWATER_HEAT_EXCHANGER_UA_PER_UNIT_W_PER_K",
+                getattr(dc_config, "SEAWATER_HEAT_EXCHANGER_UA_W_PER_K", 0.0),
+            ),
+            0.0,
+        )
+        if per_unit_ua_w_per_k > 0:
+            dc_config.SEAWATER_HEAT_EXCHANGER_UA_PER_UNIT_W_PER_K = per_unit_ua_w_per_k
+            dc_config.SEAWATER_HEAT_EXCHANGER_UA_W_PER_K = per_unit_ua_w_per_k * design_unit_count
+
+
+def _config_float(value: object, default: float) -> float:
+    try:
+        if value is None:
+            return default
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _config_int(value: object, default: int) -> int:
+    try:
+        if value is None:
+            return default
+        return int(math.ceil(float(value)))
+    except (TypeError, ValueError, OverflowError):
+        return default
+
+
+def _config_bool(value: object, default: bool) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+    return bool(value)
 
 
 def _print_progress(message: str, enabled: bool = True) -> None:

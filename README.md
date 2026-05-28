@@ -12,6 +12,8 @@
 
 - 单城市数据中心能耗、PUE 和碳排放计算。
 - 空气源冷却与海水源冷却的沿海城市批量对比。
+- 按设施容量自动分配合理的物理 rack 数量，避免将 medium/large 设施压缩到固定 20 个 rack 中造成不合理高出口温度。
+- 海水冷却按设施容量和逐小时热排放自动估算取排水流量、换热单元数量和换热器 UA，避免 large 设施被固定单排口流量误报排放温升超限。
 - 基于 timestamp 对齐 workload、EPW 气温、SST 和电网碳强度。
 - 气象输入统一为 2025 年 ERA5 AMY EPW，避免典型气象年和实际年份混用造成的对比偏差。
 - 基于 ERA5 海上风电数据估算年度电量平衡所需的风电装机容量。
@@ -188,6 +190,7 @@ python -m scripts.run_load_shift_and_battery_optimization
 - 实际容量条件下的风机容量需求与负荷迁移优化效果，当前主结果暂不考虑蓄电池。
 - 命令行入口按 `--mode` 直接调度 `run_country_growth_cooling_comparison(...)` 和 `run_country_growth_load_shift_optimization(...)`；`--mode all` 会依次运行两类汇总。
 - `city_scale_allocations.csv` 保留 small / medium / large 的分配明细；每个代表城市承载该国家该情景的沿海新增容量，即国家总增长容量乘以 `Country_manifest.coastal_share_of_total_pct / 100`；城市和国家层面的主结果均为三种规模合并后的 `all_scales` 结果。
+- 每个 scale 的单体设施容量会作为 `rated_it_power_kw` 传入能耗模型；能耗模型会按容量自动估算物理 rack 数量、海水取排水设计流量和换热单元数量，并用代表 rack 权重保持 medium/large 设施的计算效率。
 - 冷却系统对比以 `air_source` 为 baseline，`seawater` 为对比方案；负荷迁移优化以 `optimization_scenario == baseline` 为 baseline。
 - 负荷迁移主结果仅包含 `baseline` 和 `load_shift`，不包含蓄电池场景。
 - 国家结果不是城市求和，而是该国家所有代表城市整体结果的算术平均，并保留 `representative_city_count`。
@@ -226,7 +229,7 @@ country_growth_cache/
     japan_<hash>.csv
 ```
 
-每个国家计算完成后只写入该国家自己的 cache 文件，并用当前已完成国家的缓存刷新 `--output-dir` 下的城市汇总和国家平均汇总 CSV。重新运行时会先检查对应国家 cache，已完整存在的城市会跳过，只补算缺失城市。
+每个国家计算完成后只写入该国家自己的 cache 文件，并用当前已完成国家的缓存刷新 `--output-dir` 下的城市汇总和国家平均汇总 CSV。重新运行时会先检查对应国家 cache，已完整存在的城市会跳过，只补算缺失城市。缓存签名包含能耗模型版本号；当 rack 自动定容或冷却模型逻辑发生变化时，会自动生成新的 cache 子目录，避免复用旧模型结果。
 
 Python 中也可以直接调用两个主函数：
 
@@ -310,12 +313,16 @@ strict_coastal_optimization_country_summary_<cooling>_<hours>.csv
 
 `energy.calculate_datacenter_energy` 将 workload、城市气象、海表温度和电网碳强度对齐到同一小时序列，然后调用详细数据中心模型计算 IT 能耗、冷却能耗、总能耗和碳排放。
 
+IT/rack 模型会根据 `rated_it_power_kw` 自动估算物理 rack 数量。默认目标功率密度为 `50 kW/rack`，即 10 MW 级 medium 设施会被解释为约 200 个物理 rack，而不是把全部 IT 容量压入基础配置中的 20 个 rack。为了避免 large 设施展开成过多对象，仿真仍使用基础配置中的代表 rack，并通过 `RACK_COUNT_MULTIPLIERS` 对 CPU 功率、IT 风扇功率和 CRAC 回风温度做加权汇总。
+
+如果模型输出 `WARNING, the outlet temperature is higher than 60C`，通常表示单 rack 功率密度或风量假设不合理。自动 rack 定容会降低由固定 rack 数导致的误报；若修改默认 rack 功率密度或服务器风量参数后仍出现该告警，应优先检查 `rated_it_power_kw`、rack 目标功率、IT 风扇参数和供/回风 approach temperature。
+
 海水源热泵模型包括：
 
 - 冷冻水回路：根据供回水温差、比热和泵效率计算冷冻水流量与泵功耗。
-- 海水取排水回路：根据允许温升、管线长度、管径、粗糙度、局部损失和泵效率计算海水流量、压降和泵功耗。
-- 板式换热器：基于 UA、有效度、NTU 和夹点温差判断自然冷却能力。
-- 热泵机组：优先使用配置中的性能曲线，缺失曲线时使用 Carnot 近似回退。
+- 海水取排水回路：根据允许温升、管线长度、管径、粗糙度、局部损失和泵效率计算海水流量、压降和泵功耗。`auto_size_seawater_flow = true` 时，`max_seawater_flow_per_unit_m3_s` 表示单个取排水/换热单元的流量上限，模型会按热排放自动增加单元数并扩大总流量；关闭自动扩展后，`max_seawater_flow_m3_s` 会作为绝对上限，超过时仍报告排口温升违规。
+- 板式换热器：基于 UA、有效度、NTU 和夹点温差判断自然冷却能力。`auto_size_heat_exchangers = true` 时，`heat_exchanger_ua_per_unit_w_per_k` 会随自动估算的换热单元数放大为总 UA。
+- 热泵机组：优先使用配置中的性能曲线，缺失曲线时使用 Carnot 近似回退。`heat_pump_rated_capacity_w = 0` 表示自动定容，会按当前温度和流量修正系数反推足够的额定容量；显式配置正的额定容量时，模型仍会在容量不足时报告 `unmet_cooling_load`。
 - 控制逻辑：逐小时判断自然冷却、混合冷却或机械热泵模式。
 
 ### 时间对齐
@@ -394,10 +401,24 @@ python batch_generate_epw_era5_only_global.py ^
 python data/offshore_wind_download_toolkit/download_era5_strict_coastal_wind_inputs.py
 ```
 
+## 测试与验证
+
+运行单元测试：
+
+```bash
+python -m pytest -q
+```
+
+与本次能耗模型修正直接相关的测试包括：
+
+- `tests/test_datacenter_rack_sizing.py`：验证 medium 级设施会自动分配物理 rack 数量，并验证 large 海水设施会自动估算取排水流量和换热单元数量。
+- `tests/test_seawater_heat_pump.py`：验证海水热泵自动定容不会因性能曲线流量修正产生虚假的 unmet cooling load，同时验证海水取排水自动扩流会消除排口温升误报，并保留显式关闭自动扩流时的告警能力。
+
 ## 注意事项
 
 - 批量 baseline 中缺少有效碳强度、SST 或风电输入数据的城市会被跳过，并在命令行输出跳过原因。
 - 批量优化默认不保存每个城市的 8760 小时明细，避免输出文件过多；如需单城市小时级结果，请调用 `run_optimization(..., output_results=True, include_hourly=True)`。
+- `country_growth_cache/` 位于项目根目录，不会随 `--output-dir` 改变。能耗模型版本变化会生成新的缓存签名；如需释放磁盘空间，可在确认不再需要旧结果后手动删除旧 cache 子目录。
 
 ### `scripts/run_load_shift_and_battery_optimization.py` 结果字段说明
 
