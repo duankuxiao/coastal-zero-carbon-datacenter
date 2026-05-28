@@ -231,6 +231,14 @@ class DataCenter_ITModel():
         self.racks_list = []
         self.rack_supply_approach_temp_list = rack_supply_approach_temp_list
         self.rack_CPU_config = rack_CPU_config
+        rack_count_multipliers = getattr(DC_ITModel_config, "RACK_COUNT_MULTIPLIERS", None)
+        if rack_count_multipliers is None:
+            rack_count_multipliers = [1.0 for _ in range(num_racks)]
+        self.rack_count_multipliers = list(rack_count_multipliers)[:num_racks]
+        if len(self.rack_count_multipliers) < num_racks:
+            self.rack_count_multipliers.extend(
+                [1.0 for _ in range(num_racks - len(self.rack_count_multipliers))]
+            )
 
         self.rackwise_inlet_temp = []
 
@@ -271,8 +279,8 @@ class DataCenter_ITModel():
         f = 0.526
         g = -14.01
 
-        for rack, rack_supply_approach_temp, ITE_load_pct \
-                in zip(self.racks_list, self.rack_supply_approach_temp_list, ITE_load_pct_list):
+        for rack, rack_supply_approach_temp, ITE_load_pct, rack_multiplier \
+                in zip(self.racks_list, self.rack_supply_approach_temp_list, ITE_load_pct_list, self.rack_count_multipliers):
             # clamp supply approach temperatures
             rack_supply_approach_temp = rack.clamp_supply_approach_temp(rack_supply_approach_temp)
             rack_inlet_temp = rack_supply_approach_temp + CRAC_setpoint
@@ -280,8 +288,8 @@ class DataCenter_ITModel():
             rack_cpu_power, rack_itfan_power = rack.compute_instantaneous_pwr_vecd(rack_inlet_temp, ITE_load_pct)
             # Max IT Power : 83000
             # Min IT Power : 28000
-            rackwise_cpu_pwr.append(rack_cpu_power)
-            rackwise_itfan_pwr.append(rack_itfan_power)
+            rackwise_cpu_pwr.append(rack_cpu_power * rack_multiplier)
+            rackwise_itfan_pwr.append(rack_itfan_power * rack_multiplier)
 
             power_term = (rack_cpu_power + rack_itfan_power) ** d
             airflow_term = self.DC_ITModel_config.C_AIR * self.DC_ITModel_config.RHO_AIR * rack.get_total_rack_fan_v() ** e * f
@@ -306,7 +314,10 @@ class DataCenter_ITModel():
     def total_datacenter_full_load(self, ):
         """Calculate the total DC IT(IT CPU POWER + IT FAN POWER) power consumption
         """
-        x = [rack_item.get_current_rack_load() for rack_item in self.racks_list]
+        x = [
+            rack_item.get_current_rack_load() * rack_multiplier
+            for rack_item, rack_multiplier in zip(self.racks_list, self.rack_count_multipliers)
+        ]
         self.total_DC_full_load = sum(x)
 
     def calculate_cooling_tower_water_usage(self):
@@ -605,7 +616,8 @@ def chiller_sizing(DC_Config, min_CRAC_setpoint=16, max_CRAC_setpoint=22, max_am
         dc.compute_datacenter_IT_load_outlet_temp(ITE_load_pct_list=ITE_load_pct_list, CRAC_setpoint=max_CRAC_setpoint)
 
     avg_CRAC_return_temp = calculate_avg_CRAC_return_temp(rack_return_approach_temp_list=DC_Config.RACK_RETURN_APPROACH_TEMP_LIST,
-                                                          rackwise_outlet_temp=rackwise_outlet_temp)
+                                                          rackwise_outlet_temp=rackwise_outlet_temp,
+                                                          rack_weight_list=getattr(DC_Config, "RACK_COUNT_MULTIPLIERS", None))
 
     data_center_total_ITE_Load = sum(rackwise_cpu_pwr) + sum(rackwise_itfan_pwr)
 
@@ -635,7 +647,7 @@ def chiller_sizing(DC_Config, min_CRAC_setpoint=16, max_CRAC_setpoint=22, max_am
     return ctafr, CT_rated_load
 
 
-def calculate_avg_CRAC_return_temp(rack_return_approach_temp_list, rackwise_outlet_temp):
+def calculate_avg_CRAC_return_temp(rack_return_approach_temp_list, rackwise_outlet_temp, rack_weight_list=None):
     """Calculate the CRAC return air temperature
 
         Args:
@@ -644,8 +656,15 @@ def calculate_avg_CRAC_return_temp(rack_return_approach_temp_list, rackwise_outl
         Returns:
             (float): CRAC return air temperature
         """
-    n = len(rack_return_approach_temp_list)
-    return sum([i + j for i, j in zip(rack_return_approach_temp_list, rackwise_outlet_temp)]) / n  # CRAC return is averaged across racks
+    return_temperatures = [i + j for i, j in zip(rack_return_approach_temp_list, rackwise_outlet_temp)]
+    if not return_temperatures:
+        return 0.0
+    if rack_weight_list is None:
+        return sum(return_temperatures) / len(return_temperatures)
+    weights = list(rack_weight_list)[:len(return_temperatures)]
+    if len(weights) != len(return_temperatures) or sum(weights) <= 0:
+        return sum(return_temperatures) / len(return_temperatures)
+    return sum(temp * weight for temp, weight in zip(return_temperatures, weights)) / sum(weights)
 
 
 """

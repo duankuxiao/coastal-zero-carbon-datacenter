@@ -46,6 +46,7 @@ from utils.tools import (_resolve_baseline_alignment, _resolve_path, _pct, _reso
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 CACHE_DIR_NAME = "country_growth_cache"
+ENERGY_MODEL_CACHE_VERSION = "rack-autosize-v1"
 COUNTRY_MANIFEST_SHEET = "Country_manifest"
 CITY_MANIFEST_SHEET = "City_manifest"
 DATACENTER_SCALE_SHEET = "Datacenter_scale"
@@ -495,6 +496,7 @@ def _run_country_growth_cooling_outputs(
             "wind_rated": wind_rated,
             "wind_cut_out": wind_cut_out,
             "cooling_types": COOLING_TYPES,
+            "energy_model_cache_version": ENERGY_MODEL_CACHE_VERSION,
         },
     )
     files["cooling_scale_cache_dir"] = cache_dir
@@ -636,6 +638,7 @@ def _run_country_growth_load_shift_outputs(
             "wind_cut_in": wind_cut_in,
             "wind_rated": wind_rated,
             "wind_cut_out": wind_cut_out,
+            "energy_model_cache_version": ENERGY_MODEL_CACHE_VERSION,
         },
     )
     files["load_shift_scale_cache_dir"] = cache_dir

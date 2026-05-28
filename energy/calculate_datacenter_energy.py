@@ -49,6 +49,7 @@ SST_FILE = (
 DEFAULT_OUTPUT_DIR = ROOT_DIR / "results"
 XLSX_NS = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
 XLSX_REL_ID = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id"
+DEFAULT_TARGET_RACK_IT_POWER_W = 50_000.0
 
 
 def _clean_header(value: object) -> str:
@@ -974,6 +975,7 @@ def _simulate_datacenter_energy_with_env_model(
             avg_crac_return_temp = DataCenter.calculate_avg_CRAC_return_temp(
                 rack_return_approach_temp_list=dc_config.RACK_RETURN_APPROACH_TEMP_LIST,
                 rackwise_outlet_temp=rackwise_outlet_temp,
+                rack_weight_list=getattr(dc_config, "RACK_COUNT_MULTIPLIERS", None),
             )
             data_center_total_ite_load = sum(rackwise_cpu_pwr) + sum(rackwise_itfan_pwr)
             seawater_temp = (
@@ -1065,7 +1067,7 @@ def _build_scaled_dc_config(
     dc_config.COOLING_SYSTEM_MODE = (
         "seawater" if cooling_type == "seawater" else "conventional_full"
     )
-    dc_config.MAX_W_PER_RACK = int(math.ceil(rated_it_power_w / dc_config.NUM_RACKS))
+    _configure_scaled_rack_layout(dc_config, rated_it_power_w)
     dc_config.RACK_CPU_CONFIG = _expand_rack_cpu_config_to_capacity(
         dc_config.RACK_CPU_CONFIG,
         dc_config.MAX_W_PER_RACK,
@@ -1094,6 +1096,65 @@ def _build_scaled_dc_config(
     dc_config.CT_REFRENCE_AIR_FLOW_RATE = ctafr
     dc_config.CT_FAN_REF_P = ct_rated_load
     return dc_config
+
+
+def _configure_scaled_rack_layout(
+    dc_config: DC_Config,
+    rated_it_power_w: float,
+    target_rack_power_w: float = DEFAULT_TARGET_RACK_IT_POWER_W,
+) -> None:
+    """Keep modeled rack power realistic while preserving aggregate facility load."""
+    target_rack_power_w = max(float(target_rack_power_w), 1.0)
+    base_rack_count = max(int(getattr(dc_config, "NUM_RACKS", 1)), 1)
+    physical_rack_count = max(base_rack_count, int(math.ceil(rated_it_power_w / target_rack_power_w)))
+    modeled_rack_count = base_rack_count
+
+    dc_config.PHYSICAL_NUM_RACKS = physical_rack_count
+    dc_config.MODELED_NUM_RACKS = modeled_rack_count
+    dc_config.NUM_RACKS = modeled_rack_count
+    dc_config.RACK_COUNT_MULTIPLIERS = _rack_count_multipliers(
+        physical_rack_count,
+        modeled_rack_count,
+    )
+    dc_config.MAX_W_PER_RACK = int(math.ceil(rated_it_power_w / physical_rack_count))
+    dc_config.RACK_SUPPLY_APPROACH_TEMP_LIST = _repeat_sequence_to_length(
+        dc_config.RACK_SUPPLY_APPROACH_TEMP_LIST,
+        modeled_rack_count,
+    )
+    dc_config.RACK_RETURN_APPROACH_TEMP_LIST = _repeat_sequence_to_length(
+        dc_config.RACK_RETURN_APPROACH_TEMP_LIST,
+        modeled_rack_count,
+    )
+    dc_config.RACK_CPU_CONFIG = _repeat_rack_cpu_config_to_length(
+        dc_config.RACK_CPU_CONFIG,
+        modeled_rack_count,
+    )
+
+
+def _rack_count_multipliers(physical_rack_count: int, modeled_rack_count: int) -> list[float]:
+    if modeled_rack_count <= 0:
+        raise ValueError("modeled_rack_count must be positive.")
+    multiplier = float(physical_rack_count) / float(modeled_rack_count)
+    return [multiplier for _ in range(modeled_rack_count)]
+
+
+def _repeat_sequence_to_length(values: list[float], length: int) -> list[float]:
+    if not values:
+        raise ValueError("Rack approach temperature list cannot be empty.")
+    return [float(values[index % len(values)]) for index in range(length)]
+
+
+def _repeat_rack_cpu_config_to_length(
+    rack_cpu_config: list[list[dict[str, float]]],
+    length: int,
+) -> list[list[dict[str, float]]]:
+    if not rack_cpu_config:
+        raise ValueError("RACK_CPU_CONFIG cannot be empty.")
+    repeated: list[list[dict[str, float]]] = []
+    for index in range(length):
+        template = rack_cpu_config[index % len(rack_cpu_config)]
+        repeated.append([dict(cpu) for cpu in template])
+    return repeated
 
 
 def _print_progress(message: str, enabled: bool = True) -> None:
