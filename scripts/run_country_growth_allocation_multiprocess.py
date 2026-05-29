@@ -2550,7 +2550,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--time-alignment", choices=["sst", "latest", "start_time"], default=None)
     parser.add_argument("--max-carbon-gap-hours", type=int, default=6)
     parser.add_argument("--cooling", choices=["seawater", "air_source"], default="seawater")
-    parser.add_argument("--objectives", nargs="+", default=["min-grid-mwh", "min-grid-co2"])
+    parser.add_argument("--objectives", nargs="+", default=["min-grid-co2"],help="min-grid-mwh",)
     parser.add_argument("--battery-capacity-mwh", type=float, default=535.4)
     parser.add_argument("--battery-roundtrip-efficiency", type=float, default=0.97)
     parser.add_argument("--grid-import-limit-mw", type=float, default=None)
@@ -2576,7 +2576,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
 
 if __name__ == "__main__":
     args = _build_arg_parser().parse_args(sys.argv[1:])
-    args.mode = 'cooling'   # ["cooling", "load-shift"]
+    args.mode = 'load-shift'   # ["cooling", "load-shift"]
     args.workers = 2
     mode = _normalize_mode(args.mode)
 
