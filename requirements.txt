@@ -1,0 +1,37 @@
+# Core data/scientific stack
+numpy
+pandas
+scipy
+
+# Weather, wind, and NetCDF processing
+xarray
+netCDF4
+h5netcdf
+cdsapi
+pvlib
+timezonefinder
+tqdm
+
+# Optimization/RL environments
+gym
+gymnasium
+ray[rllib]
+torch
+pettingzoo
+supersuit
+cloudpickle
+absl-py
+setproctitle
+tensorboardX
+PyYAML
+
+# Dashboarding
+dash
+dash-bootstrap-components
+plotly
+
+# Cooling/data-center utilities
+psychrolib
+
+# Tests
+pytest

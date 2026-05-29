@@ -52,7 +52,6 @@
 ├── docs/                                      # 方法说明与案例文档
 ├── tests/                                     # 单元测试
 ├── utils/                                     # 配置读取和辅助工具
-├── harl/                                      # 强化学习算法与环境代码
 ├── figures/                                  # 图表和项目图片
 └── results/                                  # 计算结果输出目录
 ```
@@ -76,31 +75,17 @@
 
 ## 环境依赖
 
-基础计算依赖：
+要求 Python 3.10 或更高版本。代码中使用了 `str | Path`、`pd.Series | None` 等 Python 3.10 类型标注语法，Python 3.9 或更低版本无法直接运行。
+
+建议在虚拟环境中安装依赖：
 
 ```bash
-pip install numpy pandas
+python -m pip install -r requirements.txt
 ```
 
-海上风电 `.nc`/netCDF 数据读取依赖：
+`requirements.txt` 已包含基础计算、NetCDF/ERA5 数据处理、零碳调度优化、强化学习环境、Dash 可视化和测试依赖。
 
-```bash
-pip install xarray netCDF4
-```
-
-小时级零碳调度优化依赖：
-
-```bash
-pip install scipy
-```
-
-重新生成 2025 年 ERA5-only EPW 文件时，还需要配置 Copernicus CDS API 凭据，并安装：
-
-```bash
-pip install cdsapi xarray netCDF4 h5netcdf pvlib timezonefinder tqdm
-```
-
-Electricity Maps 数据下载需要设置 API Token。
+重新生成 2025 年 ERA5-only EPW 或海上风电 ERA5 数据时，还需要配置 Copernicus CDS API 凭据。Electricity Maps 数据下载需要设置 API Token。
 
 ## 快速开始
 
