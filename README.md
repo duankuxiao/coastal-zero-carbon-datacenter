@@ -4,88 +4,75 @@
 
 # Coastal Zero-Carbon Datacenter
 
-沿海数据中心零碳潜力评估工具包，用于比较常规空气源冷却与海水源冷却在不同城市中的能耗、PUE、碳排放表现，并进一步结合 2025 年 ERA5 海上风电数据评估年度绿电覆盖和小时级零碳调度潜力。
+沿海数据中心零碳潜力评估工具包。项目用于比较空气源冷却与海水源冷却在不同沿海城市的数据中心能耗、PUE、碳排放表现，并结合 2025 年 ERA5 海上风电、海表温度、EPW 气象、电网碳强度和数据中心工作负载，评估年度绿电覆盖与小时级负荷转移调度效果。
 
-项目整合全球城市/都市圈清单、2025 年 ERA5-only AMY EPW 气象文件、Open-Meteo 海表温度、Electricity Maps 电网碳强度、ERA5 海上风电气象数据和数据中心工作负载曲线，支撑“沿海数据中心 + 海水冷却 + 海上风电 + 储能/负荷转移”的年度和小时级分析。
+当前主流程以国家 2030 数据中心容量增长情景为入口：读取国家、城市和 small / medium / large 数据中心规模配置，把每个国家的沿海新增容量分配到代表城市和设施规模，再批量运行冷却系统对比与零碳调度计算。
 
 ## 功能概览
 
-- 单城市数据中心能耗、PUE 和碳排放计算。
-- 空气源冷却与海水源冷却的沿海城市批量对比。
-- 按设施容量自动分配合理的物理 rack 数量，避免将 medium/large 设施压缩到固定 20 个 rack 中造成不合理高出口温度。
-- 海水冷却按设施容量和逐小时热排放自动估算取排水流量、换热单元数量和换热器 UA，避免 large 设施被固定单排口流量误报排放温升超限。
+- 单城市数据中心 IT、冷却、总能耗、PUE 和碳排放计算。
+- 空气源冷却与海水源冷却对比。
+- 按设施容量自动估算物理 rack 数量，避免 medium / large 设施被压缩到固定 rack 数导致不合理高出口温度。
+- 海水冷却按设施容量和逐小时热排放自动估算取排水流量、换热单元数量和换热器 UA。
 - 基于 timestamp 对齐 workload、EPW 气温、SST 和电网碳强度。
-- 气象输入统一为 2025 年 ERA5 AMY EPW，避免典型气象年和实际年份混用造成的对比偏差。
-- 基于 ERA5 海上风电数据估算年度电量平衡所需的风电装机容量。
-- 基于线性规划优化小时级风电、储能、负荷转移和电网购电调度。
+- 基于 ERA5 海上风电数据估算年度电量覆盖所需风电装机容量。
+- 基于线性规划优化小时级风电、负荷转移、储能和电网购电调度。
 - 支持 `min-grid-mwh` 和 `min-grid-co2` 两类优化目标。
-- 提供 EPW、海表温度、电网碳强度和海上风电输入数据的下载与再生成脚本。
+- 支持配置文件驱动的国家-城市-规模批量计算。
 
 ## 目录结构
 
 ```text
 .
+├── run.py                                      # 当前主批量入口，读取配置并运行国家增长情景
 ├── scripts/
-│   ├── run_air_source_vs_seawater_heat_pump_comparison.py  # 空气源热泵/海水源热泵对比批量基准测试
-│   ├── run_load_shift_and_battery_optimization.py          # 负荷迁移与蓄电池批量优化
-│   ├── run_country_growth_allocation.py                    # 国家-城市-规模增长容量分配批量计算
-│   └── __init__.py
+│   └── run_config.txt                         # run.py 默认配置文件，JSON 格式
 ├── energy/
-│   ├── calculate_datacenter_energy.py         # 单城市数据中心能耗/排放计算入口
+│   ├── calculate_datacenter_energy.py         # 单城市能耗/排放计算入口
 │   ├── datacenter.py                          # 数据中心 IT 与 HVAC 详细模型
 │   └── seawater_heat_pump.py                  # 海水源热泵、取排水、换热器和控制模型
 ├── renewables/
 │   ├── calculate_wind_capacity.py             # 年度风电装机容量估算入口
 │   └── wind_power.py                          # ERA5 风电发电量计算基础函数
 ├── optimization/
-│   ├── optimize_zero_carbon.py                # 单城市风电/储能/负荷转移/购电优化器
-│   ├── battery_model.py                       # 储能模型
-│   ├── battery_env_fwd_view.py                # 储能强化学习环境
-│   └── load_shift.py                          # 可转移负荷环境
+│   └── optimize_zero_carbon.py                # 单城市小时级风电/储能/负荷转移/购电优化器
 ├── data/
-│   ├── target_city_map.csv                    # 220 个城市/都市圈及沿海分类
+│   ├── coastal_datacenter_city_manifest.xlsx  # 国家、城市和数据中心规模清单
 │   ├── Workload/                              # CPU 工作负载曲线
-│   ├── epw_download_toolkit/                  # 2025 ERA5-only EPW 生成脚本与气象文件
-│   ├── sst_download_toolkit/                  # 海表温度采集脚本与数据
-│   ├── ci_download_toolkit/                   # 电网碳强度采集脚本与数据
+│   ├── epw_download_toolkit/                  # ERA5-only EPW 生成脚本与气象文件
+│   ├── sst_download_toolkit/                  # Open-Meteo 海表温度采集脚本与数据
+│   ├── ci_download_toolkit/                   # Electricity Maps 电网碳强度脚本与数据
 │   └── offshore_wind_download_toolkit/        # ERA5 海上风电输入数据与下载清单
-├── docs/                                      # 方法说明与案例文档
 ├── tests/                                     # 单元测试
-├── utils/                                     # 配置读取和辅助工具
-├── figures/                                  # 图表和项目图片
-└── results/                                  # 计算结果输出目录
+├── utils/                                     # 配置读取、输出表和辅助工具
+├── figures/                                  # 项目图片
+└── results/                                  # 默认结果输出目录，已被 .gitignore 忽略
 ```
-
-所有批量运行入口统一放在 `scripts/` 中，推荐使用 `python -m scripts.run_air_source_vs_seawater_heat_pump_comparison`、`python -m scripts.run_load_shift_and_battery_optimization` 和 `python -m scripts.run_country_growth_allocation`。
 
 ## 数据说明
 
 主要输入数据包括：
 
-- `data/coastal_datacenter_city_manifest.csv`：城市/都市圈、区域、经纬度和沿海分类。
-- `data/Workload/*.csv`：小时级 CPU 负载曲线，要求包含 `cpu_load` 列，取值通常为 0 到 1。
-- `data/epw_download_toolkit/target_city_map_epw_coordinates_checked.csv`：EPW 生成坐标、CAMS FOV 判定和目标 EPW 文件名。
-- `data/epw_download_toolkit/epw_2025_era5_only/*.epw`：2025 年 ERA5-only AMY EPW 气象文件。核心模型读取解压后的 EPW 目录，不直接读取 zip 包。
-- `data/sst_download_toolkit/sea_surface_temperature_2025_openmeteo.csv`：非 Inland 城市的小时级海表温度，单位为 degC。
-- `data/ci_download_toolkit/carbon_intensity_electricitymaps.csv`：小时级电网碳强度宽表，单位为 gCO2eq/kWh。
-- `data/offshore_wind_download_toolkit/offshore_wind/*.nc`：沿海城市代表海点的 ERA5 风电气象输入。
-- `data/offshore_wind_download_toolkit/strict_coastal_offshore_wind_points_manifest.csv`：城市与海上风电代表点、ERA5 网格点的对应关系。
-
-各类下载和再生成脚本位于对应的 `*_download_toolkit` 目录中。
+- `data/coastal_datacenter_city_manifest.xlsx`：核心清单文件。默认读取三个 sheet：
+  - `Country_manifest`：国家 2025 基准容量、2030 情景容量和沿海占比。
+  - `City_manifest`：国家、代表城市、EPW 文件前缀和 `toolkit_ready` 标记。
+  - `Datacenter_scale`：small / medium / large 的容量比例和单体容量上下限。
+- `data/Workload/*.csv`：小时级 CPU 负载曲线，默认使用 `GoogleClusteData_CPU_Data_Hourly_1.csv`，要求包含 `cpu_load` 列。
+- `data/epw_download_toolkit/epw_2025_era5_only/`：解压后的 2025 ERA5-only AMY EPW 文件目录。仓库同时包含 `epw_2025_era5_only.zip`，模型读取解压目录。
+- `data/sst_download_toolkit/sea_surface_temperature_2025_openmeteo.csv`：小时级海表温度。
+- `data/ci_download_toolkit/city_grid_carbon_intensity_electricitymaps_10y.csv`：小时级电网碳强度宽表。
+- `data/offshore_wind_download_toolkit/strict_coastal_download_manifest.csv`：城市与海上风电代表点、ERA5 文件的对应关系。
+- `data/offshore_wind_download_toolkit/offshore_wind/*.nc`：沿海城市代表海点的 ERA5 海上风电气象输入。
 
 ## 环境依赖
 
-要求 Python 3.10 或更高版本。代码中使用了 `str | Path`、`pd.Series | None` 等 Python 3.10 类型标注语法，Python 3.9 或更低版本无法直接运行。
-
-建议在虚拟环境中安装依赖：
+要求 Python 3.10 或更高版本。建议在虚拟环境中安装依赖：
 
 ```bash
 python -m pip install -r requirements.txt
 ```
 
-`requirements.txt` 已包含基础计算、NetCDF/ERA5 数据处理、零碳调度优化、强化学习环境、Dash 可视化和测试依赖。
-
-重新生成 2025 年 ERA5-only EPW 或海上风电 ERA5 数据时，还需要配置 Copernicus CDS API 凭据。Electricity Maps 数据下载需要设置 API Token。
+重新生成 ERA5 EPW 或海上风电数据时，需要配置 Copernicus CDS API 凭据。下载 Electricity Maps 数据时，需要设置 API Token。
 
 ## 快速开始
 
@@ -98,286 +85,196 @@ python -m energy.calculate_datacenter_energy --list-cities
 计算单城市空气源冷却结果：
 
 ```bash
-python -m energy.calculate_datacenter_energy ^
-  --city "Shanghai" ^
-  --cooling air_source ^
-  --rated-it-power-kw 20000 ^
-  --hours 8760 ^
-  --time-alignment latest
+python -m energy.calculate_datacenter_energy --city "Shanghai" --cooling air_source --rated-it-power-kw 20000 --hours 8760 --time-alignment latest
 ```
 
 计算单城市海水源冷却结果：
 
 ```bash
-python -m energy.calculate_datacenter_energy ^
-  --city "Shanghai" ^
-  --cooling seawater ^
-  --rated-it-power-kw 20000 ^
-  --hours 8760 ^
-  --time-alignment sst ^
-  --json
+python -m energy.calculate_datacenter_energy --city "Shanghai" --cooling seawater --rated-it-power-kw 20000 --hours 8760 --time-alignment sst --json
 ```
 
-估算单城市年度电量平衡所需的海上风电装机容量：
+估算单城市年度电量覆盖所需海上风电装机容量：
 
 ```bash
-python -m renewables.calculate_wind_capacity ^
-  --city "Shanghai" ^
-  --cooling seawater ^
-  --rated-it-power-kw 20000 ^
-  --hours 8760 ^
-  --json
+python -m renewables.calculate_wind_capacity --city "Shanghai" --cooling seawater --rated-it-power-kw 20000 --hours 8760 --json
 ```
 
-运行沿海城市空气源/海水源批量基准测试：
+运行单城市小时级零碳调度示例：
 
 ```bash
-python -m scripts.run_air_source_vs_seawater_heat_pump_comparison ^
-  --rated-it-power-kw 20000 ^
-  --idle-power-fraction 0.3 ^
-  --hours 8760 ^
-  --start-time "2025-01-01 00:00" ^
-  --time-alignment sst ^
-  --max-carbon-gap-hours 6 ^
-  --output-dir results
+python -m optimization.optimize_zero_carbon
 ```
 
-运行所有沿海城市批量零碳调度优化前，先在 `scripts/run_load_shift_and_battery_optimization.py` 的 `main()` 中修改函数输入参数，例如：
+该入口当前使用模块内的 Shanghai 示例参数。如需批量运行国家增长情景，使用根目录 `run.py`。
 
-```python
-from scripts.run_load_shift_and_battery_optimization import run_optimizations
+## 批量运行
 
-_, _, output_files = run_optimizations(
-    cooling="seawater",
-    objectives=("min-grid-mwh", "min-grid-co2"),
-    rated_it_power_kw=20000.0,
-    battery_capacity_mwh=535.4,
-    battery_roundtrip_efficiency=0.97,
-    grid_import_limit_mw=None,
-    battery_charge_limit_mw=25.0,
-    battery_discharge_limit_mw=25.0,
-    load_shift_fraction=0.3,
-    output_dir=DEFAULT_OUTPUT_DIR,
-)
-```
+默认配置位于 `scripts/run_config.txt`。该文件是 JSON 格式，控制输入文件、输出目录、仿真时段、风机参数、负荷转移比例、并发数和要运行的 case。
 
-然后运行：
+默认配置示例包括：
+
+- `air_source_baseline`：空气源冷却基准。
+- `seawater_baseline`：海水源冷却基准。
+- `seawater_load_shift_co2`：海水源冷却 + 负荷转移，以 `min-grid-co2` 为优化目标。
+
+只生成国家增长和城市规模分配，不调用能耗、风电或优化模型：
 
 ```bash
-python -m scripts.run_load_shift_and_battery_optimization
+python run.py --dry-run --output-dir results
 ```
 
-## 国家-城市-规模增长容量分配
-
-新增入口 `scripts/run_country_growth_allocation.py` 用于按国家 2030 情景新增容量中的沿海部分，生成代表城市和数据中心规模分配，并批量比较两类效果：
-
-- 空气源热泵 vs 海水源热泵冷却系统；
-- 实际容量条件下的风机容量需求与负荷迁移优化效果，当前主结果暂不考虑蓄电池。
-- 命令行入口按 `--mode` 直接调度 `run_country_growth_cooling_comparison(...)` 和 `run_country_growth_load_shift_optimization(...)`；`--mode all` 会依次运行两类汇总。
-- `city_scale_allocations.csv` 保留 small / medium / large 的分配明细；每个代表城市承载该国家该情景的沿海新增容量，即国家总增长容量乘以 `Country_manifest.coastal_share_of_total_pct / 100`；城市和国家层面的主结果均为三种规模合并后的 `all_scales` 结果。
-- 每个 scale 的单体设施容量会作为 `rated_it_power_kw` 传入能耗模型；能耗模型会按容量自动估算物理 rack 数量、海水取排水设计流量和换热单元数量，并用代表 rack 权重保持 medium/large 设施的计算效率。
-- 冷却系统对比以 `air_source` 为 baseline，`seawater` 为对比方案；负荷迁移优化以 `optimization_scenario == baseline` 为 baseline。
-- 负荷迁移主结果仅包含 `baseline` 和 `load_shift`，不包含蓄电池场景。
-- 国家结果不是城市求和，而是该国家所有代表城市整体结果的算术平均，并保留 `representative_city_count`。
-
-先运行 dry-run 可只检查容量增长和规模分配，不调用能耗、风电或优化模型：
+快速验证少量国家和较短时段：
 
 ```bash
-python -m scripts.run_country_growth_allocation ^
-  --dry-run ^
-  --output-dir results/country_growth_allocation
+python run.py --max-countries 1 --hours 24 --workers 2 --output-dir results/smoke
 ```
 
-完整计算示例：
+完整运行默认配置：
 
 ```bash
-python -m scripts.run_country_growth_allocation ^
-  --hours 8760 ^
-  --start-time "2025-01-01 00:00" ^
-  --mode all ^
-  --workers 15 ^
-  --output-dir results/country_growth_allocation
+python run.py --config-file scripts/run_config.txt
 ```
 
-`--workers` 控制国家级并发线程数，默认 `15`。每个国家占用一个线程，国家内部的城市和规模任务串行执行，避免嵌套线程导致资源过载；如果优化求解器或机器内存成为瓶颈，可以降低线程数。
-`--mode cooling` 只运行空气源/海水源热泵对比；`--mode load-shift` 只运行风机容量需求与负荷迁移优化；`--mode all` 依次运行两类汇总。负荷迁移优化默认只使用 `min-grid-co2` 目标，以最小化购电碳排放；如需同时比较购电量目标，可显式传入 `--objectives min-grid-co2 min-grid-mwh`。
+常用覆盖参数：
 
-脚本会在项目根目录下维护断点缓存 `country_growth_cache/`，而不是写入 `--output-dir`。每次运行会按运行参数和容量分配生成一个签名子目录，并在子目录中按国家分别保存 scale-level cache CSV，例如：
+```bash
+python run.py --countries China Japan --hours 8760 --start-time "2025-01-01 00:00" --workers 2 --output-dir results/country_growth
+```
+
+`run.py` 的主要命令行参数：
+
+- `--config-file`：配置文件路径，默认 `scripts/run_config.txt`。
+- `--manifest-file`：覆盖配置中的清单文件路径。
+- `--output-dir`：覆盖配置中的结果目录。
+- `--workload-file`：覆盖配置中的工作负载文件。
+- `--include-not-ready`：包含 `toolkit_ready` 不为 true 的城市。
+- `--dry-run`：只写入基础分配表，不运行模型。
+- `--countries`：限制运行一个或多个国家。
+- `--max-countries`：只运行筛选后的前 N 个国家，适合快速验证。
+- `--write-debug-scale-results`：额外输出 scale-level 中间结果。
+- `--idle-power-fraction`、`--sst-fraction`、`--load-shift-fraction`、`--wind-loss-fraction`：敏感性分析参数。
+- `--workers`：并发 worker 数。默认配置为 2，可按机器资源调整。
+
+配置文件中的 `cases` 控制运行内容。case 字段包括：
+
+- `cooling_type`：`air_source` 或 `seawater`。
+- `optimization_enabled`：`false` 表示只做冷却/风机容量基准，`true` 表示运行负荷转移优化。
+- `optimization_method`：当前支持 `baseline` 和 `load_shift`。
+- `optimization_objective` 或 `optimization_objectives`：支持 `co2` / `min-grid-co2` 和 `mwh` / `min-grid-mwh`。
+
+## 输出文件
+
+`run.py --dry-run` 输出：
 
 ```text
-country_growth_cache/
-  country_growth_cooling_scale_cache_8760h_<signature>/
-    china_<hash>.csv
-    japan_<hash>.csv
-  country_growth_load_shift_scale_cache_8760h_<signature>/
-    china_<hash>.csv
-    japan_<hash>.csv
+country_growths.csv
+city_scale_allocations.csv
 ```
 
-每个国家计算完成后只写入该国家自己的 cache 文件，并用当前已完成国家的缓存刷新 `--output-dir` 下的城市汇总和国家平均汇总 CSV。重新运行时会先检查对应国家 cache，已完整存在的城市会跳过，只补算缺失城市。缓存签名包含能耗模型版本号；当 rack 自动定容或冷却模型逻辑发生变化时，会自动生成新的 cache 子目录，避免复用旧模型结果。
-
-Python 中也可以直接调用两个主函数：
-
-```python
-from scripts.run_country_growth_allocation import (
-    run_country_growth_cooling_comparison,
-    run_country_growth_load_shift_optimization,
-)
-
-run_country_growth_cooling_comparison(output_dir="results/country_growth_cooling")
-run_country_growth_load_shift_optimization(output_dir="results/country_growth_load_shift")
-```
-
-默认读取 `data/coastal_datacenter_city_manifest.xlsx` 中的三个 sheet：
-
-- `Country_manifest`：需要国家列、沿海占比列、一个 2025 基准容量列和四个 2030 情景容量列。当前文件使用 `country`、`coastal_share_of_total_pct`、`total_gw_2025`、`total_gw_2030_Base`、`total_gw_2030_Lift-Off`、`total_gw_2030_High Efficiency`、`total_gw_2030_Headwinds`。脚本会识别 MW/GW 单位并统一转换为 MW，总增长值为 `2030 情景容量 - 2025 基准容量`，城市分配使用的沿海增长值为 `总增长值 * coastal_share_of_total_pct / 100`。
-- `City_manifest`：需要 `country`、`datacentermap_market` 和 `toolkit_ready`。默认只使用 `toolkit_ready` 为 true / 1 / yes 的城市；加 `--include-not-ready` 可取消该过滤。每个代表城市都承载该国家该情景的沿海新增容量，国家结果对代表城市做算术平均。
-- `Datacenter_scale`：需要规模、比例、最小容量 MW、最大容量 MW。当前文件使用 `category`、`ratio`、`lower_bound_mw`、`upper_bound_mw`。比例必须合计为 1 或 100。
-
-输出文件写入 `--output-dir`，均使用 `utf-8-sig`：
-
-- `country_growths.csv`：国家在四种 2030 情景下的总新增容量、沿海占比和沿海新增容量。
-- `city_scale_allocations.csv`：每个 country × scenario × city × small/medium/large 的沿海容量、设施数量和单体容量。
-- `country_growth_cooling_city_summary_<hours>.csv`：四种情景下城市级 `all_scales` 海水源相对空气源热泵的提升效果。
-- `country_growth_cooling_country_summary_<hours>.csv`：国家级 `all_scales` 海水源相对空气源热泵的提升效果，按代表城市算术平均。
-- `country_growth_load_shift_city_summary_<hours>.csv`：城市级风机容量需求和负荷迁移相对 baseline 的优化效果。
-- `country_growth_load_shift_country_summary_<hours>.csv`：国家级风机容量需求和负荷迁移相对 baseline 的优化效果，按代表城市算术平均。
-- 加 `--write-debug-scale-results` 时额外输出 `country_growth_cooling_scale_debug_<hours>.csv` 和 `country_growth_load_shift_scale_debug_<hours>.csv`，用于检查 small / medium / large 的中间计算。
-
-单城市优化也可以在 Python 中直接调用：
-
-```python
-from optimization.optimize_zero_carbon import optimization
-
-result = optimization(
-    city="Shanghai",
-    cooling="seawater",
-    wind_capacity_mw=75.21,
-    wind_nc_file="data/offshore_wind_download_toolkit/offshore_wind/OW_006_China_Shanghai_era5_atmos_2025-01-01_2025-12-31.nc",
-    objective="min-grid-co2",
-    include_hourly=False,
-    output_results=True,
-)
-```
-
-## 输出结果
-
-单城市数据中心能耗计算会在 `results/` 下生成：
+冷却系统基准输出使用统一最终表结构：
 
 ```text
-datacenter_energy_<city>_<cooling_type>_<rated_power>.csv
+city_air_source_baseline_<hours>.csv
+country_air_source_baseline_<hours>.csv
+city_seawater_baseline_<hours>.csv
+country_seawater_baseline_<hours>.csv
 ```
 
-单城市风电装机容量估算会生成：
+负荷转移优化输出按冷却类型和目标命名，例如：
 
 ```text
-wind_capacity_<city>_<cooling_type>_<rated_power>.csv
+city_seawater_load_shift_co2_<hours>.csv
+country_seawater_load_shift_co2_<hours>.csv
+city_seawater_load_shift_mwh_<hours>.csv
+country_seawater_load_shift_mwh_<hours>.csv
 ```
 
-沿海城市基准测试会生成三张表：
+加 `--write-debug-scale-results` 时会额外输出：
 
 ```text
-baseline_air_source_results_<rated_power>_<hours>.csv
-baseline_seawater_results_<rated_power>_<hours>.csv
-baseline_summary_<rated_power>_<hours>.csv
+debug_cooling_scale_<hours>.csv
+debug_load_shift_scale_<hours>.csv
 ```
 
-沿海城市批量零碳调度优化会生成三张表，不保存每个城市的 8760 小时明细：
+最终表的核心字段包括：
 
-```text
-strict_coastal_optimization_city_results_<cooling>_<hours>.csv
-strict_coastal_optimization_summary_<cooling>_<hours>.csv
-strict_coastal_optimization_country_summary_<cooling>_<hours>.csv
-```
+- `country`、`city`、`growth_scenario`
+- `coastal_datacenter_growth_capacity_mw`
+- `cooling_energy_kwh`、`server_energy_kwh`、`total_energy_kwh`
+- `cooling_carbon_emissions_kgco2`、`server_carbon_emissions_kgco2`、`total_carbon_emissions_kgco2`
+- `required_wind_capacity_mw`、`wind_annual_generation_mwh`
+- `wind_curtailment_mwh`、`renewable_physical_coverage_fraction`
+- `grid_purchase_mwh`、`grid_purchase_co2_kg`
 
-城市结果表每行对应一个城市、策略和优化目标，包含年度需求、风电装机、风电文件、电网购电量、购电碳排放、可再生物理覆盖率、弃风、储能充放电和负荷转移量。汇总表按 `objective + scenario` 聚合全部城市，并计算相对 `baseline` 的能耗、碳排放和购电量节省。国家汇总表按 `country_area + objective + scenario` 聚合，使用同一套相对 `baseline` 的优化效果指标。
+单城市模块会在 `results/` 下写入各自的 CSV：
+
+- `datacenter_energy_<city>_<cooling_type>_<rated_power>.csv`
+- `wind_capacity_<city>_<cooling_type>_<rated_power>.csv`
+- `optimization_<city>_<cooling>_<objective>_summary.csv`
+- `optimization_<city>_<cooling>_<objective>_hourly_inputs.csv`
+- `optimization_<city>_<cooling>_<objective>_hourly_dispatch.csv`
 
 ## 模型说明
 
-### 能耗与冷却模型
+### 能耗与冷却
 
-`energy.calculate_datacenter_energy` 将 workload、城市气象、海表温度和电网碳强度对齐到同一小时序列，然后调用详细数据中心模型计算 IT 能耗、冷却能耗、总能耗和碳排放。
+`energy.calculate_datacenter_energy` 将 workload、EPW 干球温度、海表温度和电网碳强度对齐到同一小时序列，然后调用详细数据中心模型计算 IT 能耗、冷却能耗、总能耗和碳排放。
 
-IT/rack 模型会根据 `rated_it_power_kw` 自动估算物理 rack 数量。默认目标功率密度为 `50 kW/rack`，即 10 MW 级 medium 设施会被解释为约 200 个物理 rack，而不是把全部 IT 容量压入基础配置中的 20 个 rack。为了避免 large 设施展开成过多对象，仿真仍使用基础配置中的代表 rack，并通过 `RACK_COUNT_MULTIPLIERS` 对 CPU 功率、IT 风扇功率和 CRAC 回风温度做加权汇总。
+IT/rack 模型会根据 `rated_it_power_kw` 自动估算物理 rack 数量。默认目标功率密度为 `50 kW/rack`。为了避免 large 设施展开成过多对象，仿真仍使用代表 rack，并通过权重汇总 CPU 功率、IT 风扇功率和 CRAC 回风温度。
 
-如果模型输出 `WARNING, the outlet temperature is higher than 60C`，通常表示单 rack 功率密度或风量假设不合理。自动 rack 定容会降低由固定 rack 数导致的误报；若修改默认 rack 功率密度或服务器风量参数后仍出现该告警，应优先检查 `rated_it_power_kw`、rack 目标功率、IT 风扇参数和供/回风 approach temperature。
-
-海水源热泵模型包括：
-
-- 冷冻水回路：根据供回水温差、比热和泵效率计算冷冻水流量与泵功耗。
-- 海水取排水回路：根据允许温升、管线长度、管径、粗糙度、局部损失和泵效率计算海水流量、压降和泵功耗。`auto_size_seawater_flow = true` 时，`max_seawater_flow_per_unit_m3_s` 表示单个取排水/换热单元的流量上限，模型会按热排放自动增加单元数并扩大总流量；关闭自动扩展后，`max_seawater_flow_m3_s` 会作为绝对上限，超过时仍报告排口温升违规。
-- 板式换热器：基于 UA、有效度、NTU 和夹点温差判断自然冷却能力。`auto_size_heat_exchangers = true` 时，`heat_exchanger_ua_per_unit_w_per_k` 会随自动估算的换热单元数放大为总 UA。
-- 热泵机组：优先使用配置中的性能曲线，缺失曲线时使用 Carnot 近似回退。`heat_pump_rated_capacity_w = 0` 表示自动定容，会按当前温度和流量修正系数反推足够的额定容量；显式配置正的额定容量时，模型仍会在容量不足时报告 `unmet_cooling_load`。
-- 控制逻辑：逐小时判断自然冷却、混合冷却或机械热泵模式。
+海水源热泵模型包含冷冻水回路、海水取排水回路、板式换热器、热泵机组和逐小时控制逻辑。配置允许自动放大海水流量、换热单元数和热泵容量，也保留固定容量不足时的约束违规与告警输出。
 
 ### 时间对齐
 
-`--hours` 表示仿真小时数。碳强度不再简单读取 CSV 前 `hours` 行，而是按目标 timestamp 对齐：
+`--hours` 表示仿真小时数。碳强度、SST 和 EPW 不按简单行号截取，而是按 timestamp 或 day-of-year/hour 对齐：
 
-- `seawater` 默认使用 `sst`，以 SST 文件 timestamp 作为主时间轴。
-- `air_source` 默认使用 `latest`，使用碳强度文件中最新的可用时间窗口。
-- `scripts.run_air_source_vs_seawater_heat_pump_comparison` 默认使用 `sst`，保证空气源与海水源使用同一时期碳排放因子。
-- 指定 `--start-time "2025-01-01 00:00"` 时，可切换到从指定时间开始截取 `hours` 小时。
-- 碳强度缺少少量小时会按时间插值，默认最大连续缺口为 6 小时，可通过 `--max-carbon-gap-hours` 调整。
-- EPW 干球温度按 2025 年 AMY EPW 的 8760 小时读取，并按目标 timestamp 的 day-of-year/hour 映射到仿真时间轴。
+- `seawater` 默认使用 `sst` 时间轴。
+- `air_source` 默认使用最新可用碳强度窗口。
+- 指定 `--start-time` 时使用从指定时间开始的窗口。
+- 碳强度短缺口默认最多插值 6 小时，可通过 `--max-carbon-gap-hours` 调整。
 
-### 海上风电装机容量
+### 海上风电
 
-`renewables.calculate_wind_capacity` 做年度电量匹配：
+`renewables.calculate_wind_capacity` 做年度电量平衡：
 
 ```text
 required_wind_capacity_mw = datacenter_total_energy_mwh / wind_generation_per_mw_mwh
 ```
 
-其中 `wind_generation_per_mw_mwh` 来自 ERA5 小时级风速、温度和气压数据。该模型用于年度装机估算，不模拟小时级供需平衡、储能、弃风或 24/7 碳匹配。
+`wind_generation_per_mw_mwh` 来自 ERA5 小时级风速、温度和气压数据，以及通用海上风机功率曲线参数。该估算用于年度装机容量，不代表小时级 24/7 零碳匹配。
 
-### 小时级零碳调度优化
+### 小时级调度
 
-`optimization.optimize_zero_carbon` 使用确定性线性规划模型协调小时级数据中心负荷、固定风电出力、储能、负荷转移和电网购电。
+`optimization.optimize_zero_carbon` 使用确定性线性规划模型协调小时级数据中心需求、固定风电出力、负荷转移、储能和电网购电。
 
 - `min-grid-mwh`：最小化全年电网购电量。
-- `min-grid-co2`：最小化全年电网购电碳排放。
-- 储能采用循环 SOC 约束，支持容量、充电功率、放电功率和往返效率参数。
-- 可转移负荷按每小时上下浮动比例约束，并保持全年总需求不变。
-- 弃风作为未使用风电输出，不默认计入外送收益或减排收益。
+- `min-grid-co2`：最小化全年购电碳排放。
+- 负荷转移保持全年总需求不变，并限制每小时上下浮动比例。
+- 储能采用循环 SOC 约束，支持容量、充放电功率和往返效率参数。
+- 当前 `run.py` 批量主结果只写出 baseline 与 load-shift，单城市优化函数仍支持储能参数。
 
 ## 数据再生成
 
 海表温度：
 
 ```bash
-python data/sst_download_toolkit/collect_sst_openmeteo_quick.py ^
-  --input data/target_city_map.csv ^
-  --year 2025 ^
-  --output data/sst_download_toolkit/sea_surface_temperature_2025_openmeteo.csv
+cd data/sst_download_toolkit
+python collect_sst_openmeteo_quick.py --year 2025 --output sea_surface_temperature_2025_openmeteo.csv
 ```
 
 电网碳强度：
 
-```bash
-set ELECTRICITYMAPS_TOKEN=your_token
-
-python data/ci_download_toolkit/download_electricitymaps_10y_hourly.py ^
-  --manifest city_electricitymaps_request_manifest.csv ^
-  --output-dir data/ci_download_toolkit ^
-  --output-wide carbon_intensity_electricitymaps.csv ^
-  --end now ^
-  --years-back 10 ^
-  --emission-factor-type direct ^
-  --unavailable-zone-action missing
+```powershell
+$env:ELECTRICITYMAPS_TOKEN = "your_token"
+python data/ci_download_toolkit/download_electricitymaps_10y_hourly.py --output-dir data/ci_download_toolkit --output-wide city_grid_carbon_intensity_electricitymaps_10y.csv --end now --years-back 10
 ```
 
 EPW 气象文件：
 
 ```bash
 cd data/epw_download_toolkit
-python batch_generate_epw_era5_only_global.py ^
-  --input target_city_map_epw_coordinates_checked.csv ^
-  --year 2025 ^
-  --out-dir epw_2025_era5_only ^
-  --cache-dir era5_only_cache ^
-  --status-csv epw_era5_only_status.csv ^
-  --zip-output epw_2025_era5_only.zip
+python batch_generate_epw_era5_only_global.py --year 2025 --out-dir epw_2025_era5_only --zip-output epw_2025_era5_only.zip
 ```
 
 海上风电 ERA5 输入：
@@ -386,7 +283,9 @@ python batch_generate_epw_era5_only_global.py ^
 python data/offshore_wind_download_toolkit/download_era5_strict_coastal_wind_inputs.py
 ```
 
-## 测试与验证
+各下载工具的完整参数请参考对应目录下的 `README.md`。
+
+## 测试
 
 运行单元测试：
 
@@ -394,38 +293,17 @@ python data/offshore_wind_download_toolkit/download_era5_strict_coastal_wind_inp
 python -m pytest -q
 ```
 
-与本次能耗模型修正直接相关的测试包括：
+重点测试覆盖：
 
-- `tests/test_datacenter_rack_sizing.py`：验证 medium 级设施会自动分配物理 rack 数量，并验证 large 海水设施会自动估算取排水流量和换热单元数量。
-- `tests/test_seawater_heat_pump.py`：验证海水热泵自动定容不会因性能曲线流量修正产生虚假的 unmet cooling load，同时验证海水取排水自动扩流会消除排口温升误报，并保留显式关闭自动扩流时的告警能力。
+- `tests/test_datacenter_rack_sizing.py`：rack 自动定容和 large 海水设施自动扩容。
+- `tests/test_seawater_heat_pump.py`：海水热泵自动定容、取排水自动扩流和固定容量违规报告。
+- `tests/test_time_alignment.py`：SST、碳强度、EPW 和自定义起始时间对齐。
+- `tests/test_zero_carbon_optimizer.py`：购电量/购电碳排放目标、储能和负荷转移约束。
+- `tests/test_country_growth_allocation.py`：国家增长容量、城市规模分配、国家平均和批量输出逻辑。
 
 ## 注意事项
 
-- 批量 baseline 中缺少有效碳强度、SST 或风电输入数据的城市会被跳过，并在命令行输出跳过原因。
-- 批量优化默认不保存每个城市的 8760 小时明细，避免输出文件过多；如需单城市小时级结果，请调用 `run_optimization(..., output_results=True, include_hourly=True)`。
-- `country_growth_cache/` 位于项目根目录，不会随 `--output-dir` 改变。能耗模型版本变化会生成新的缓存签名；如需释放磁盘空间，可在确认不再需要旧结果后手动删除旧 cache 子目录。
-
-### `scripts/run_load_shift_and_battery_optimization.py` 结果字段说明
-
-批量优化会在汇总表中按 `objective` 和 `scenario` 对比三种场景：
-
-- `baseline`：不启用负荷调整，不启用蓄电池。该场景用于给出未优化时的数据中心能耗、碳排放、风电覆盖量、弃风量、风电覆盖率和购电量。
-- `load_shift`：只启用负荷调整，不启用蓄电池。汇总表会同时给出相对 `baseline` 的能耗、碳排放和购电量节约值及节约比例。
-- `load_shift_battery`：同时启用负荷调整和蓄电池。汇总表会给出所需蓄电池容量，并给出相对 `baseline` 的能耗、碳排放和购电量节约值及节约比例。
-
-关键结果列含义如下：
-
-- `datacenter_total_energy_mwh` / `annual_demand_mwh`：数据中心年度总用电需求，单位 MWh。负荷调整只改变小时分布，全年需求保持不变。
-- `grid_purchase_mwh`：从电网购电量，单位 MWh。
-- `grid_purchase_co2_kg`：购电对应碳排放，单位 kg CO2。
-- `annual_wind_mwh`：配置风电容量对应的年度风电发电量，单位 MWh。
-- `wind_coverage_mwh`：由风电覆盖的数据中心用电量，按 `annual_demand_mwh - grid_purchase_mwh` 计算，单位 MWh。
-- `wind_curtailment_mwh`：弃风量，单位 MWh。
-- `renewable_physical_coverage_fraction`：风电覆盖率，按 `wind_coverage_mwh / annual_demand_mwh` 计算。
-- `battery_configured_capacity_mwh`：该场景配置给优化器的蓄电池容量，单位 MWh。
-- `battery_required_capacity_mwh`：优化结果实际用到的蓄电池能量容量，按蓄电池 SOC 最大值与最小值之差计算，单位 MWh。
-- `energy_savings_mwh_vs_baseline` / `energy_savings_pct_vs_baseline`：相对 `baseline` 的数据中心能耗节约值和比例。
-- `co2_savings_kg_vs_baseline` / `co2_savings_pct_vs_baseline`：相对 `baseline` 的碳排放节约值和比例。
-- `grid_purchase_savings_mwh_vs_baseline` / `grid_purchase_savings_pct_vs_baseline`：相对 `baseline` 的购电量节约值和比例。
-- 年度绿电覆盖不等同于小时级 24/7 零碳。小时级匹配需要结合风电时序、储能、购电约束和负荷转移约束解释。
-- 仓库包含较大的 CSV、EPW 和 ERA5 数据文件，公开发布前应确认数据授权、引用方式和文件体积是否符合需求。
+- `results/`、解压后的 EPW 目录和下载缓存默认不纳入 Git。
+- 批量运行中缺少有效碳强度、SST、EPW 或风电输入的城市会失败或跳过，并在输出行中保留 `status` 和 `error_message`。
+- 年度绿电覆盖不等同于小时级 24/7 零碳。小时级匹配需要结合风电时序、负荷转移、储能和购电约束解释。
+- 仓库包含较大的 CSV、EPW 和 ERA5 数据文件。公开发布前应确认数据授权、引用方式和文件体积是否符合需求。

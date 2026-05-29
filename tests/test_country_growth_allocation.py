@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 from types import SimpleNamespace
 import threading
@@ -6,20 +7,26 @@ import time
 import pandas as pd
 import pytest
 
-from scripts import run_country_growth_allocation as country_growth_allocation_module
-from scripts.run_country_growth_allocation import (
-    append_scale_totals,
+import run as country_growth_allocation_module
+from run import (
+    COOLING_METRICS,
+    OPTIMIZATION_RESULT_METRICS,
+    _load_shift_scenario_configs,
+    _run_country_growth_cooling_outputs,
+    _run_country_growth_load_shift_outputs,
     build_city_scale_allocations,
-    build_cooling_comparison_results,
-    build_country_average_results,
     build_country_growths,
-    build_optimization_comparison_results,
+    build_cooling_issue_summary,
     choose_facility_count,
     load_scale_definitions,
     run_cooling_comparisons,
-    run_country_growth_cooling_comparison,
-    run_country_growth_allocation,
-    run_country_growth_load_shift_optimization,
+    run_configured_cases,
+)
+from utils.output_tables import (
+    append_scale_totals,
+    build_cooling_comparison_results,
+    build_country_average_results,
+    build_optimization_comparison_results,
     select_all_scale_results,
 )
 
@@ -161,7 +168,10 @@ def test_choose_facility_count_does_not_inflate_capacity_below_minimum():
     assert split.below_scale_min is True
 
 
-def test_dry_run_writes_growth_and_allocation_csvs_without_energy_model(tmp_path: Path):
+def test_dry_run_writes_growth_and_allocation_csvs_without_energy_model(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
     def fail_energy(**kwargs):
         raise AssertionError("dry-run must not call energy model")
 
@@ -171,12 +181,41 @@ def test_dry_run_writes_growth_and_allocation_csvs_without_energy_model(tmp_path
     def fail_optimizer(**kwargs):
         raise AssertionError("dry-run must not call optimizer")
 
-    output_files = run_country_growth_allocation(
+    config_file = tmp_path / "run_config.json"
+    config_file.write_text(
+        json.dumps(
+            {
+                "cases": [
+                    {
+                        "name": "air_source_baseline",
+                        "cooling_type": "air_source",
+                        "optimization_enabled": False,
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    country_growths = build_country_growths(_country_rows(country_growth_mw=100.0))
+    city_scale_allocations = build_city_scale_allocations(
+        country_growths=country_growths,
+        city_rows=_city_rows(),
+        scale_definitions=load_scale_definitions(_scale_rows()),
+    )
+
+    def fake_prepare_country_growth_inputs(**kwargs):
+        return Path(kwargs["output_dir"]), country_growths, city_scale_allocations
+
+    monkeypatch.setattr(
+        country_growth_allocation_module,
+        "_prepare_country_growth_inputs",
+        fake_prepare_country_growth_inputs,
+    )
+
+    output_files = run_configured_cases(
+        config_file=config_file,
         output_dir=tmp_path,
         dry_run=True,
-        country_rows=_country_rows(country_growth_mw=100.0),
-        city_rows=_city_rows(),
-        scale_rows=_scale_rows(),
         energy_calculator=fail_energy,
         wind_calculator=fail_wind,
         optimizer=fail_optimizer,
@@ -218,6 +257,7 @@ def test_parallel_cooling_uses_thread_safe_cache_for_duplicate_tasks():
         start_time="2025-01-01 00:00",
         time_alignment="start_time",
         max_carbon_gap_hours=6,
+        sst_fraction=1.0,
         hub_height_m=150.0,
         wind_loss_fraction=0.15,
         wind_cut_in=3.0,
@@ -239,62 +279,83 @@ def test_parallel_cooling_uses_thread_safe_cache_for_duplicate_tasks():
     assert len(wind_calls) == 1
 
 
-def test_cooling_main_function_writes_city_and_country_summaries(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-):
-    monkeypatch.setattr(country_growth_allocation_module, "ROOT_DIR", tmp_path / "root")
-    output_files = run_country_growth_cooling_comparison(
-        output_dir=tmp_path / "results",
-        country_rows=_country_rows(country_growth_mw=100.0),
-        city_rows=_city_rows(),
-        scale_rows=_scale_rows(),
+def test_cooling_output_function_writes_city_and_country_final_tables(tmp_path: Path):
+    output_files = _run_country_growth_cooling_outputs(
+        output_path=tmp_path / "results",
+        allocations=_sample_allocations(country_growth_mw=100.0),
+        cooling_types=("air_source", "seawater"),
+        workload_file="workload.csv",
+        idle_power_fraction=0.3,
+        hours=24,
+        start_time="2025-01-01 00:00",
+        time_alignment="start_time",
+        max_carbon_gap_hours=6,
+        sst_fraction=1.0,
+        hub_height_m=150.0,
+        wind_loss_fraction=0.15,
+        wind_cut_in=3.0,
+        wind_rated=12.0,
+        wind_cut_out=25.0,
+        energy_cache={},
+        wind_resource_cache={},
+        energy_cache_locks={},
+        wind_resource_cache_locks={},
+        cache_locks_guard=threading.Lock(),
         energy_calculator=lambda **kwargs: _fake_energy_result(
             kwargs["cooling_type"],
             kwargs["rated_it_power_kw"],
         ),
         wind_calculator=lambda **kwargs: _fake_wind_result(),
-        hours=24,
         workers=2,
+        write_debug_scale_results=False,
     )
 
-    assert output_files["cooling_city_summary_csv"].exists()
-    assert output_files["cooling_country_summary_csv"].exists()
-    assert output_files["cooling_issues_csv"].exists()
-    city_summary = pd.read_csv(output_files["cooling_city_summary_csv"])
-    assert set(city_summary["scale"]) == {"all_scales"}
-    assert "total_energy_kwh_savings_vs_air_source" in city_summary.columns
+    assert output_files["city_air_source_baseline_csv"].exists()
+    assert output_files["country_air_source_baseline_csv"].exists()
+    assert output_files["city_seawater_baseline_csv"].exists()
+    assert output_files["country_seawater_baseline_csv"].exists()
+    city_air_source = pd.read_csv(output_files["city_air_source_baseline_csv"])
+    country_seawater = pd.read_csv(output_files["country_seawater_baseline_csv"])
+    assert city_air_source.shape[0] == 8
+    assert country_seawater.shape[0] == 4
+    assert "total_energy_kwh" in city_air_source.columns
+    assert city_air_source["total_energy_kwh"].sum() > 0
 
 
-def test_cooling_main_function_writes_issue_summary(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-):
-    monkeypatch.setattr(country_growth_allocation_module, "ROOT_DIR", tmp_path / "root")
-
+def test_cooling_issue_summary_reports_model_problems():
     def fake_energy(**kwargs):
         result = _fake_energy_result(kwargs["cooling_type"], kwargs["rated_it_power_kw"])
-        if kwargs["cooling_type"] == "seawater":
-            result.unmet_cooling_energy_kwh = 1.5
-            result.constraint_violation_hours = 2.0
-            result.outfall_temperature_violation_hours = 1.0
-            result.seawater_temperature_violation_hours = 1.0
-            result.model_warning_count = 1
-            result.model_warning_messages = "WARNING, the outlet temperature is higher than 60C: 61.000"
+        result.unmet_cooling_energy_kwh = 1.5
+        result.constraint_violation_hours = 2.0
+        result.outfall_temperature_violation_hours = 1.0
+        result.seawater_temperature_violation_hours = 1.0
+        result.model_warning_count = 1
+        result.model_warning_messages = "WARNING, the outlet temperature is higher than 60C: 61.000"
         return result
 
-    output_files = run_country_growth_cooling_comparison(
-        output_dir=tmp_path / "results",
-        country_rows=_country_rows(country_growth_mw=100.0),
-        city_rows=_city_rows(),
-        scale_rows=_scale_rows(),
+    results = run_cooling_comparisons(
+        allocations=pd.DataFrame([_scale_result("small", "seawater", total_energy_kwh=10.0)]),
+        cooling_types=("seawater",),
+        workload_file="workload.csv",
+        idle_power_fraction=0.3,
+        hours=24,
+        start_time="2025-01-01 00:00",
+        time_alignment="start_time",
+        max_carbon_gap_hours=6,
+        sst_fraction=1.0,
+        hub_height_m=150.0,
+        wind_loss_fraction=0.15,
+        wind_cut_in=3.0,
+        wind_rated=12.0,
+        wind_cut_out=25.0,
+        energy_cache={},
+        wind_resource_cache={},
         energy_calculator=fake_energy,
         wind_calculator=lambda **kwargs: _fake_wind_result(),
-        hours=24,
-        workers=2,
+        workers=1,
     )
 
-    issues = pd.read_csv(output_files["cooling_issues_csv"])
+    issues = build_cooling_issue_summary(results)
     assert {
         "unmet_cooling_load",
         "outfall_temperature_violation",
@@ -303,66 +364,7 @@ def test_cooling_main_function_writes_issue_summary(
     }.issubset(set(issues["issue_type"]))
 
 
-def test_cooling_main_function_reuses_root_cache_for_completed_cities(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-):
-    monkeypatch.setattr(country_growth_allocation_module, "ROOT_DIR", tmp_path)
-    output_dir = tmp_path / "results"
-    calls = {"energy": 0, "wind": 0}
-
-    def fake_energy(**kwargs):
-        calls["energy"] += 1
-        return _fake_energy_result(kwargs["cooling_type"], kwargs["rated_it_power_kw"])
-
-    def fake_wind(**kwargs):
-        calls["wind"] += 1
-        return _fake_wind_result()
-
-    first_output_files = run_country_growth_cooling_comparison(
-        output_dir=output_dir,
-        country_rows=_country_rows(country_growth_mw=100.0),
-        city_rows=_city_rows(),
-        scale_rows=_scale_rows(),
-        energy_calculator=fake_energy,
-        wind_calculator=fake_wind,
-        hours=24,
-        workers=2,
-    )
-    first_energy_calls = calls["energy"]
-    first_wind_calls = calls["wind"]
-    assert first_energy_calls > 0
-    assert first_wind_calls > 0
-    first_city_shape = pd.read_csv(first_output_files["cooling_city_summary_csv"]).shape
-
-    calls["energy"] = 0
-    calls["wind"] = 0
-    second_output_files = run_country_growth_cooling_comparison(
-        output_dir=output_dir,
-        country_rows=_country_rows(country_growth_mw=100.0),
-        city_rows=_city_rows(),
-        scale_rows=_scale_rows(),
-        energy_calculator=fake_energy,
-        wind_calculator=fake_wind,
-        hours=24,
-        workers=2,
-    )
-
-    cache_dirs = list((tmp_path / "country_growth_cache").glob("country_growth_cooling_scale_cache_24h_*"))
-    assert len(cache_dirs) == 1
-    assert cache_dirs[0].is_dir()
-    cache_files = list(cache_dirs[0].glob("*.csv"))
-    assert len(cache_files) == 1
-    assert not (output_dir / "country_growth_cache").exists()
-    assert calls == {"energy": 0, "wind": 0}
-    assert first_city_shape == pd.read_csv(second_output_files["cooling_city_summary_csv"]).shape
-
-
-def test_cooling_uses_country_level_workers_and_country_cache_files(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-):
-    monkeypatch.setattr(country_growth_allocation_module, "ROOT_DIR", tmp_path)
+def test_cooling_uses_country_level_workers():
     country_rows = [_country_row("Country A", 100.0), _country_row("Country B", 100.0)]
     city_rows = [
         {"country": "Country A", "datacentermap_market": "A City", "toolkit_ready": True},
@@ -382,52 +384,84 @@ def test_cooling_uses_country_level_workers_and_country_cache_files(
             active_energy_calls -= 1
         return _fake_energy_result(kwargs["cooling_type"], kwargs["rated_it_power_kw"])
 
-    run_country_growth_cooling_comparison(
-        output_dir=tmp_path / "results",
-        country_rows=country_rows,
+    country_growths = build_country_growths(country_rows)
+    allocations = build_city_scale_allocations(
+        country_growths=country_growths,
         city_rows=city_rows,
-        scale_rows=_scale_rows(),
+        scale_definitions=load_scale_definitions(_scale_rows()),
+    )
+
+    results = run_cooling_comparisons(
+        allocations=allocations,
+        cooling_types=("air_source",),
+        workload_file="workload.csv",
+        idle_power_fraction=0.3,
+        hours=24,
+        start_time="2025-01-01 00:00",
+        time_alignment="start_time",
+        max_carbon_gap_hours=6,
+        sst_fraction=1.0,
+        hub_height_m=150.0,
+        wind_loss_fraction=0.15,
+        wind_cut_in=3.0,
+        wind_rated=12.0,
+        wind_cut_out=25.0,
+        energy_cache={},
+        wind_resource_cache={},
         energy_calculator=fake_energy,
         wind_calculator=lambda **kwargs: _fake_wind_result(),
-        hours=24,
         workers=2,
     )
 
-    cache_dirs = list((tmp_path / "country_growth_cache").glob("country_growth_cooling_scale_cache_24h_*"))
-    assert len(cache_dirs) == 1
-    cache_files = list(cache_dirs[0].glob("*.csv"))
-    assert len(cache_files) == 2
-    assert {pd.read_csv(path)["country"].iloc[0] for path in cache_files} == {"Country A", "Country B"}
+    assert set(results["country"]) == {"Country A", "Country B"}
     assert max_active_energy_calls > 1
 
 
-def test_load_shift_main_function_excludes_battery_scenario(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-):
-    monkeypatch.setattr(country_growth_allocation_module, "ROOT_DIR", tmp_path / "root")
-    output_files = run_country_growth_load_shift_optimization(
-        output_dir=tmp_path / "results",
-        country_rows=_country_rows(country_growth_mw=100.0),
-        city_rows=_city_rows(),
-        scale_rows=_scale_rows(),
+def test_load_shift_output_function_writes_only_configured_method(tmp_path: Path):
+    output_files = _run_country_growth_load_shift_outputs(
+        output_path=tmp_path / "results",
+        allocations=_sample_allocations(country_growth_mw=100.0),
+        cooling="seawater",
+        objectives=("min-grid-co2",),
+        workload_file="workload.csv",
+        idle_power_fraction=0.3,
+        hours=24,
+        start_time="2025-01-01 00:00",
+        time_alignment="start_time",
+        max_carbon_gap_hours=6,
+        sst_fraction=1.0,
+        grid_import_limit_mw=None,
+        load_shift_fraction=0.3,
+        hub_height_m=150.0,
+        wind_loss_fraction=0.15,
+        wind_cut_in=3.0,
+        wind_rated=12.0,
+        wind_cut_out=25.0,
+        energy_cache={},
+        wind_resource_cache={},
+        required_wind_cache={},
+        energy_cache_locks={},
+        wind_resource_cache_locks={},
+        required_wind_cache_locks={},
+        cache_locks_guard=threading.Lock(),
         energy_calculator=lambda **kwargs: _fake_energy_result(
             kwargs["cooling_type"],
             kwargs["rated_it_power_kw"],
         ),
         wind_calculator=lambda **kwargs: _fake_wind_result(),
         optimizer=_fake_optimizer,
-        hours=24,
         workers=2,
+        write_debug_scale_results=False,
+        write_baseline_outputs=False,
     )
 
-    assert output_files["load_shift_city_summary_csv"].exists()
-    assert output_files["load_shift_country_summary_csv"].exists()
-    city_summary = pd.read_csv(output_files["load_shift_city_summary_csv"])
-    assert set(city_summary["objective"]) == {"min-grid-co2"}
-    assert set(city_summary["comparison_optimization_scenario"]) == {"load_shift"}
-    assert "load_shift_battery" not in set(city_summary["comparison_optimization_scenario"])
-    assert "grid_purchase_mwh_savings_vs_baseline" in city_summary.columns
+    assert output_files["city_seawater_load_shift_co2_csv"].exists()
+    assert output_files["country_seawater_load_shift_co2_csv"].exists()
+    assert "city_seawater_baseline_csv" not in output_files
+    city_results = pd.read_csv(output_files["city_seawater_load_shift_co2_csv"])
+    assert city_results.shape[0] == 8
+    assert "grid_purchase_mwh" in city_results.columns
+    assert city_results["grid_purchase_mwh"].sum() > 0
 
 
 def _sample_allocations(country_growth_mw: float, coastal_share_pct: float = 100.0) -> pd.DataFrame:

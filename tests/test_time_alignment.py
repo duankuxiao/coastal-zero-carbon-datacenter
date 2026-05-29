@@ -56,7 +56,7 @@ def test_seawater_uses_sst_year_carbon_window(tmp_path, monkeypatch):
     assert np.all(aligned["carbon_intensity"] == 500.0)
 
 
-def test_sst_frcation_scales_aligned_seawater_temperature(tmp_path, monkeypatch):
+def test_sst_fraction_scales_aligned_seawater_temperature(tmp_path, monkeypatch):
     _patch_epw(monkeypatch)
     workload = _write_workload(tmp_path / "workload.csv", hours=3)
     timestamps = pd.date_range("2025-01-01 00:00", periods=3, freq="h")
@@ -71,7 +71,7 @@ def test_sst_frcation_scales_aligned_seawater_temperature(tmp_path, monkeypatch)
         start_time=None,
         time_alignment="sst",
         max_carbon_gap_hours=6,
-        sst_frcation=1.1,
+        sst_fraction=1.1,
         carbon_intensity_file=carbon,
         sst_file=sst,
         progress=False,
