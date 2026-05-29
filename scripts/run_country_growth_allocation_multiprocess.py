@@ -146,6 +146,7 @@ class CoolingTaskContext:
     start_time: str | None
     time_alignment: str | None
     max_carbon_gap_hours: int
+    sst_frcation: float
     hub_height_m: float
     wind_loss_fraction: float
     wind_cut_in: float
@@ -166,6 +167,7 @@ class OptimizationTaskContext:
     start_time: str | None
     time_alignment: str | None
     max_carbon_gap_hours: int
+    sst_frcation: float
     battery_roundtrip_efficiency: float
     grid_import_limit_mw: float | None
     hub_height_m: float
@@ -196,6 +198,7 @@ def run_country_growth_allocation(
     start_time: str | None = "2025-01-01 00:00",
     time_alignment: str | None = None,
     max_carbon_gap_hours: int = 6,
+    sst_frcation: float = 1.0,
     cooling: str = "seawater",
     objectives: Iterable[str] = ("min-grid-mwh", "min-grid-co2"),
     battery_capacity_mwh: float = 535.4,
@@ -271,6 +274,7 @@ def run_country_growth_allocation(
                 start_time=start_time,
                 time_alignment=time_alignment,
                 max_carbon_gap_hours=max_carbon_gap_hours,
+                sst_frcation=sst_frcation,
                 hub_height_m=hub_height_m,
                 wind_loss_fraction=wind_loss_fraction,
                 wind_cut_in=wind_cut_in,
@@ -301,6 +305,7 @@ def run_country_growth_allocation(
                 start_time=start_time,
                 time_alignment=time_alignment,
                 max_carbon_gap_hours=max_carbon_gap_hours,
+                sst_frcation=sst_frcation,
                 battery_roundtrip_efficiency=battery_roundtrip_efficiency,
                 grid_import_limit_mw=grid_import_limit_mw,
                 load_shift_fraction=load_shift_fraction,
@@ -340,6 +345,7 @@ def run_country_growth_cooling_comparison(
     start_time: str | None = "2025-01-01 00:00",
     time_alignment: str | None = None,
     max_carbon_gap_hours: int = 6,
+    sst_frcation: float = 1.0,
     hub_height_m: float = 150.0,
     wind_loss_fraction: float = 0.15,
     wind_cut_in: float = 3.0,
@@ -378,6 +384,7 @@ def run_country_growth_cooling_comparison(
             start_time=start_time,
             time_alignment=time_alignment,
             max_carbon_gap_hours=max_carbon_gap_hours,
+            sst_frcation=sst_frcation,
             hub_height_m=hub_height_m,
             wind_loss_fraction=wind_loss_fraction,
             wind_cut_in=wind_cut_in,
@@ -410,6 +417,7 @@ def run_country_growth_load_shift_optimization(
     start_time: str | None = "2025-01-01 00:00",
     time_alignment: str | None = None,
     max_carbon_gap_hours: int = 6,
+    sst_frcation: float = 1.0,
     battery_roundtrip_efficiency: float = 0.97,
     grid_import_limit_mw: float | None = None,
     load_shift_fraction: float = 0.3,
@@ -454,6 +462,7 @@ def run_country_growth_load_shift_optimization(
             start_time=start_time,
             time_alignment=time_alignment,
             max_carbon_gap_hours=max_carbon_gap_hours,
+            sst_frcation=sst_frcation,
             battery_roundtrip_efficiency=battery_roundtrip_efficiency,
             grid_import_limit_mw=grid_import_limit_mw,
             load_shift_fraction=load_shift_fraction,
@@ -524,6 +533,7 @@ def _run_country_growth_cooling_outputs(
     start_time: str | None,
     time_alignment: str | None,
     max_carbon_gap_hours: int,
+    sst_frcation: float,
     hub_height_m: float,
     wind_loss_fraction: float,
     wind_cut_in: float,
@@ -547,6 +557,7 @@ def _run_country_growth_cooling_outputs(
         start_time=start_time,
         time_alignment=_resolve_baseline_alignment(start_time, time_alignment),
         max_carbon_gap_hours=max_carbon_gap_hours,
+        sst_frcation=sst_frcation,
         hub_height_m=hub_height_m,
         wind_loss_fraction=wind_loss_fraction,
         wind_cut_in=wind_cut_in,
@@ -598,6 +609,7 @@ def _run_country_growth_load_shift_outputs(
     start_time: str | None,
     time_alignment: str | None,
     max_carbon_gap_hours: int,
+    sst_frcation: float,
     battery_roundtrip_efficiency: float,
     grid_import_limit_mw: float | None,
     load_shift_fraction: float,
@@ -633,6 +645,7 @@ def _run_country_growth_load_shift_outputs(
         start_time=start_time,
         time_alignment=time_alignment,
         max_carbon_gap_hours=max_carbon_gap_hours,
+        sst_frcation=sst_frcation,
         battery_capacity_mwh=0.0,
         battery_roundtrip_efficiency=battery_roundtrip_efficiency,
         grid_import_limit_mw=grid_import_limit_mw,
@@ -888,6 +901,7 @@ def run_cooling_comparisons(
     start_time: str | None,
     time_alignment: str | None,
     max_carbon_gap_hours: int,
+    sst_frcation: float,
     hub_height_m: float,
     wind_loss_fraction: float,
     wind_cut_in: float,
@@ -926,6 +940,7 @@ def run_cooling_comparisons(
             start_time=start_time,
             time_alignment=time_alignment,
             max_carbon_gap_hours=max_carbon_gap_hours,
+            sst_frcation=sst_frcation,
             hub_height_m=hub_height_m,
             wind_loss_fraction=wind_loss_fraction,
             wind_cut_in=wind_cut_in,
@@ -974,6 +989,7 @@ def run_cooling_comparisons(
                 start_time=start_time,
                 time_alignment=time_alignment,
                 max_carbon_gap_hours=max_carbon_gap_hours,
+                sst_frcation=sst_frcation,
             )
             wind_resource = _get_wind_resource(
                 cache=wind_resource_cache,
@@ -1015,6 +1031,7 @@ def run_optimization_comparisons(
     start_time: str | None,
     time_alignment: str | None,
     max_carbon_gap_hours: int,
+    sst_frcation: float,
     battery_capacity_mwh: float,
     battery_roundtrip_efficiency: float,
     grid_import_limit_mw: float | None,
@@ -1084,6 +1101,7 @@ def run_optimization_comparisons(
             start_time=start_time,
             time_alignment=time_alignment,
             max_carbon_gap_hours=max_carbon_gap_hours,
+            sst_frcation=sst_frcation,
             battery_roundtrip_efficiency=battery_roundtrip_efficiency,
             grid_import_limit_mw=grid_import_limit_mw,
             hub_height_m=hub_height_m,
@@ -1157,6 +1175,7 @@ def run_optimization_comparisons(
                 start_time=start_time,
                 time_alignment=time_alignment,
                 max_carbon_gap_hours=max_carbon_gap_hours,
+                sst_frcation=sst_frcation,
                 hub_height_m=hub_height_m,
                 wind_loss_fraction=wind_loss_fraction,
                 wind_cut_in=wind_cut_in,
@@ -1180,6 +1199,7 @@ def run_optimization_comparisons(
                 start_time=start_time,
                 time_alignment=time_alignment,
                 max_carbon_gap_hours=max_carbon_gap_hours,
+                sst_frcation=sst_frcation,
                 hub_height_m=hub_height_m,
                 wind_loss_fraction=wind_loss_fraction,
                 wind_cut_in=wind_cut_in,
@@ -1608,6 +1628,7 @@ def _run_cooling_task(
             start_time=context.start_time,
             time_alignment=context.time_alignment,
             max_carbon_gap_hours=context.max_carbon_gap_hours,
+            sst_frcation=context.sst_frcation,
         )
         wind_resource = _get_wind_resource(
             cache=wind_resource_cache,
@@ -1711,6 +1732,7 @@ def _run_optimization_task(
             start_time=context.start_time,
             time_alignment=context.time_alignment,
             max_carbon_gap_hours=context.max_carbon_gap_hours,
+            sst_frcation=context.sst_frcation,
             hub_height_m=context.hub_height_m,
             wind_loss_fraction=context.wind_loss_fraction,
             wind_cut_in=context.wind_cut_in,
@@ -1734,6 +1756,7 @@ def _run_optimization_task(
             start_time=context.start_time,
             time_alignment=context.time_alignment,
             max_carbon_gap_hours=context.max_carbon_gap_hours,
+            sst_frcation=context.sst_frcation,
             hub_height_m=context.hub_height_m,
             wind_loss_fraction=context.wind_loss_fraction,
             wind_cut_in=context.wind_cut_in,
@@ -2041,6 +2064,7 @@ def _get_energy_result(
     start_time: str | None,
     time_alignment: str | None,
     max_carbon_gap_hours: int,
+    sst_frcation: float,
 ) -> DataCenterEnergyResult:
     key = (
         city,
@@ -2052,6 +2076,7 @@ def _get_energy_result(
         str(workload_file),
         round(float(idle_power_fraction), 9),
         max_carbon_gap_hours,
+        round(float(sst_frcation), 9),
     )
     if key not in cache:
         lock = _cache_key_lock(cache_locks, cache_locks_guard, key)
@@ -2067,6 +2092,7 @@ def _get_energy_result(
                     start_time=start_time,
                     time_alignment=time_alignment,
                     max_carbon_gap_hours=max_carbon_gap_hours,
+                    sst_frcation=sst_frcation,
                     progress=False,
                 )
     return cache[key]
@@ -2128,6 +2154,7 @@ def _get_required_wind_capacity(
     start_time: str | None,
     time_alignment: str | None,
     max_carbon_gap_hours: int,
+    sst_frcation: float,
     hub_height_m: float,
     wind_loss_fraction: float,
     wind_cut_in: float,
@@ -2142,6 +2169,7 @@ def _get_required_wind_capacity(
         start_time,
         time_alignment,
         max_carbon_gap_hours,
+        round(float(sst_frcation), 9),
         round(float(hub_height_m), 9),
         round(float(wind_loss_fraction), 9),
         round(float(wind_cut_in), 9),
@@ -2166,6 +2194,7 @@ def _get_required_wind_capacity(
                     start_time=start_time,
                     time_alignment=time_alignment,
                     max_carbon_gap_hours=max_carbon_gap_hours,
+                    sst_frcation=sst_frcation,
                 )
                 wind_resource = _get_wind_resource(
                     cache=wind_resource_cache,
@@ -2544,21 +2573,22 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         help="Write scale-level cooling and optimization debug CSVs in addition to all-scale paper outputs.",
     )
     parser.add_argument("--workload-file", default=str(WORKLOAD_FILE))
-    parser.add_argument("--idle-power-fraction", type=float, default=0.23, help="0.1 0.23 0.35")
+    parser.add_argument("--idle-power-fraction", type=float, default=0.23, help="sensitivity: 0.1 / default 0.23 / 0.35")
     parser.add_argument("--hours", type=int, default=8760)
     parser.add_argument("--start-time", default="2025-01-01 00:00")
     parser.add_argument("--time-alignment", choices=["sst", "latest", "start_time"], default=None)
     parser.add_argument("--max-carbon-gap-hours", type=int, default=6)
+    parser.add_argument("--sst-fraction", dest="sst-fraction", type=float, default=1.0, help="sensitivity: 0.9 / default 1.0 / 1.1")
     parser.add_argument("--cooling", choices=["seawater", "air_source"], default="seawater")
-    parser.add_argument("--objectives", nargs="+", default=["min-grid-co2"],help="min-grid-mwh",)
+    parser.add_argument("--objectives", nargs="+", default=["min-grid-co2"],help="sensitivity:  default min-grid-co2 / min-grid-mwh",)
     parser.add_argument("--battery-capacity-mwh", type=float, default=535.4)
     parser.add_argument("--battery-roundtrip-efficiency", type=float, default=0.97)
     parser.add_argument("--grid-import-limit-mw", type=float, default=None)
     parser.add_argument("--battery-charge-limit-mw", type=float, default=25.0)
     parser.add_argument("--battery-discharge-limit-mw", type=float, default=25.0)
-    parser.add_argument("--load-shift-fraction", type=float, default=0.3, help="0.15 0.3 0.45")
+    parser.add_argument("--load-shift-fraction", type=float, default=0.3, help="sensitivity:  0.15 / default 0.3 / 0.45")
     parser.add_argument("--hub-height-m", type=float, default=150.0)
-    parser.add_argument("--wind-loss-fraction", type=float, default=0.15, help="0.1 0.15 0.2")
+    parser.add_argument("--wind-loss-fraction", type=float, default=0.15, help="sensitivity:  0.1 / default 0.15 / 0.2")
     parser.add_argument("--wind-cut-in", type=float, default=3.0)
     parser.add_argument("--wind-rated", type=float, default=12.0)
     parser.add_argument("--wind-cut-out", type=float, default=25.0)
@@ -2595,6 +2625,7 @@ if __name__ == "__main__":
             start_time=args.start_time,
             time_alignment=args.time_alignment,
             max_carbon_gap_hours=args.max_carbon_gap_hours,
+            sst_frcation=args.sst_frcation,
             cooling=args.cooling,
             objectives=tuple(args.objectives),
             battery_capacity_mwh=args.battery_capacity_mwh,
@@ -2627,6 +2658,7 @@ if __name__ == "__main__":
                     start_time=args.start_time,
                     time_alignment=args.time_alignment,
                     max_carbon_gap_hours=args.max_carbon_gap_hours,
+                    sst_frcation=args.sst_frcation,
                     hub_height_m=args.hub_height_m,
                     wind_loss_fraction=args.wind_loss_fraction,
                     wind_cut_in=args.wind_cut_in,
@@ -2652,6 +2684,7 @@ if __name__ == "__main__":
                     start_time=args.start_time,
                     time_alignment=args.time_alignment,
                     max_carbon_gap_hours=args.max_carbon_gap_hours,
+                    sst_frcation=args.sst_frcation,
                     battery_roundtrip_efficiency=args.battery_roundtrip_efficiency,
                     grid_import_limit_mw=args.grid_import_limit_mw,
                     load_shift_fraction=args.load_shift_fraction,

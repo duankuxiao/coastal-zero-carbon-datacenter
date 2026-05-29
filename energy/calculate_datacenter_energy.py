@@ -277,6 +277,7 @@ def calculate_data_center_energy(
     time_alignment: Literal["sst", "latest", "start_time"] | None = None,
     max_carbon_gap_hours: int = 6,
     progress: bool = True,
+    sst_fraction: float = 1.0,
 ) -> DataCenterEnergyResult:
     """Calculate annual or partial-period data-center energy and emissions.
 
@@ -305,6 +306,8 @@ def calculate_data_center_energy(
         max_carbon_gap_hours: Maximum consecutive missing carbon-intensity
             hours that may be filled by time interpolation after alignment.
         progress: Print stage progress to stderr. JSON output remains on stdout.
+        sst_fraction: Multiplier applied to sea-surface temperature after
+            reading and alignment.
 
     Returns:
         DataCenterEnergyResult with kWh and CO2 summary values from the
@@ -323,6 +326,7 @@ def calculate_data_center_energy(
         start_time=start_time,
         time_alignment=time_alignment,
         max_carbon_gap_hours=max_carbon_gap_hours,
+        sst_fraction=sst_fraction,
         progress=progress,
     )
     workload = aligned_inputs["workload"]
@@ -523,10 +527,14 @@ def _resolve_aligned_inputs(
     carbon_intensity_file: str | Path = CARBON_INTENSITY_FILE,
     sst_file: str | Path = SST_FILE,
     progress: bool = True,
+    sst_fraction: float = 1.0,
 ) -> dict[str, object]:
     """Return workload, weather, SST, and carbon data on one timestamp axis."""
     if max_carbon_gap_hours < 0:
         raise ValueError("max_carbon_gap_hours must be non-negative.")
+    sst_fraction = float(sst_fraction)
+    if not math.isfinite(sst_fraction) or sst_fraction <= 0:
+        raise ValueError("sst_fraction must be a positive finite number.")
 
     _print_progress("Reading workload data.", enabled=progress)
     workload = _read_workload(workload_file)
@@ -572,7 +580,7 @@ def _resolve_aligned_inputs(
             city=city,
             filename=sst_path,
             data_name="sea surface temperature",
-        )
+        ) * sst_fraction
         sst_start_time = _format_timestamp(source_series.index[0])
         sst_end_time = _format_timestamp(source_series.index[-1])
     else:
@@ -1480,6 +1488,7 @@ def main(args) -> None:
         start_time=args.start_time,
         time_alignment=args.time_alignment,
         max_carbon_gap_hours=args.max_carbon_gap_hours,
+        sst_fraction=args.sst_fraction,
     )
     csv_path = save_result_csv(result, args.output_dir)
     if args.json:
@@ -1529,6 +1538,13 @@ if __name__ == "__main__":
         type=int,
         default=6,
         help="Maximum consecutive missing carbon-intensity hours to interpolate after alignment.",
+    )
+    parser.add_argument(
+        "--sst-fraction",
+        dest="sst_fraction",
+        type=float,
+        default=1.0,
+        help="Sea-surface temperature multiplier for sensitivity analysis.",
     )
     parser.add_argument(
         "--output-dir",

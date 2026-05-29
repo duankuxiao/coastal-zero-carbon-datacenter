@@ -264,6 +264,7 @@ def build_city_inputs(
     wind_cut_in: float = 3.0,
     wind_rated: float = 12.0,
     wind_cut_out: float = 25.0,
+    sst_fraction: float = 1.0,
 ) -> OptimizationInputs:
     """Build optimization inputs from this repository's hourly data models."""
     aligned = _resolve_aligned_inputs(
@@ -274,6 +275,7 @@ def build_city_inputs(
         start_time=start_time,
         time_alignment=time_alignment,
         max_carbon_gap_hours=max_carbon_gap_hours,
+        sst_fraction=sst_fraction,
         progress=False,
     )
     simulation = _simulate_datacenter_energy_with_env_model(
@@ -450,6 +452,7 @@ def optimization(
     start_time: str | None = "2025-01-01 00:00",
     time_alignment: Literal["sst", "latest", "start_time"] | None = None,
     max_carbon_gap_hours: int = 6,
+    sst_fraction: float = 1.0,
     hub_height_m: float = 150.0,
     wind_loss_fraction: float = 0.15,
     wind_cut_in: float = 3.0,
@@ -477,6 +480,7 @@ def optimization(
         start_time=start_time,
         time_alignment=time_alignment,
         max_carbon_gap_hours=max_carbon_gap_hours,
+        sst_fraction=sst_fraction,
         hub_height_m=hub_height_m,
         wind_loss_fraction=wind_loss_fraction,
         wind_cut_in=wind_cut_in,

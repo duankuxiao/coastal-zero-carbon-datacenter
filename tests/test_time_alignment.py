@@ -56,6 +56,30 @@ def test_seawater_uses_sst_year_carbon_window(tmp_path, monkeypatch):
     assert np.all(aligned["carbon_intensity"] == 500.0)
 
 
+def test_sst_frcation_scales_aligned_seawater_temperature(tmp_path, monkeypatch):
+    _patch_epw(monkeypatch)
+    workload = _write_workload(tmp_path / "workload.csv", hours=3)
+    timestamps = pd.date_range("2025-01-01 00:00", periods=3, freq="h")
+    carbon = _write_city_series(tmp_path / "carbon.csv", timestamps, np.full(3, 100.0))
+    sst = _write_city_series(tmp_path / "sst.csv", timestamps, np.array([10.0, 15.0, 20.0]))
+
+    aligned = calc._resolve_aligned_inputs(
+        city=CITY,
+        cooling_type="seawater",
+        workload_file=workload,
+        hours=3,
+        start_time=None,
+        time_alignment="sst",
+        max_carbon_gap_hours=6,
+        sst_frcation=1.1,
+        carbon_intensity_file=carbon,
+        sst_file=sst,
+        progress=False,
+    )
+
+    assert aligned["source_temperature"].tolist() == pytest.approx([11.0, 16.5, 22.0])
+
+
 def test_carbon_gap_within_limit_is_interpolated(tmp_path, monkeypatch):
     _patch_epw(monkeypatch)
     workload = _write_workload(tmp_path / "workload.csv", hours=24)
