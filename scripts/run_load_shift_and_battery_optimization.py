@@ -19,14 +19,16 @@ from __future__ import annotations
 import json
 import math
 import re
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
 import pandas as pd
 
-from energy.calculate_datacenter_energy import WORKLOAD_FILE, load_city_manifest
+from energy.calculate_datacenter_energy import WORKLOAD_FILE, calculate_data_center_energy, load_city_manifest
 from optimization.optimize_zero_carbon import optimization
-from renewables.calculate_wind_capacity import calculate_required_wind_capacity
+from renewables.calculate_wind_capacity import calculate_wind_resource
+from utils.output_tables import write_optimization_output_tables
 from utils.tools import _pct, _hours_token, _metric_savings, _resolve_output_dir, _filename_token
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
@@ -72,6 +74,29 @@ HOURLY_RESULT_KEYS = {
     "battery_charge_hourly_mwh",
     "battery_discharge_hourly_mwh",
 }
+
+
+@dataclass(frozen=True)
+class WindCapacityWithEnergy:
+    city: str
+    point_id: object
+    wind_nc_file: object
+    cooling_type: str
+    hours: int
+    rated_it_power_kw: float
+    server_energy_kwh: float
+    server_carbon_emissions_kgco2: float
+    cooling_energy_kwh: float
+    cooling_carbon_emissions_kgco2: float
+    total_energy_kwh: float
+    total_carbon_emissions_kgco2: float
+    datacenter_total_energy_mwh: float
+    wind_generation_per_mw_mwh: float
+    required_wind_capacity_mw: float
+    annual_generation_mwh: float
+    mean_net_capacity_factor: float
+    wind_start_time: object
+    wind_end_time: object
 
 
 def run_optimizations(
@@ -123,7 +148,7 @@ def run_optimizations(
             if scenario_cooling in wind_capacities or scenario_cooling in wind_capacity_errors:
                 continue
             try:
-                wind_capacities[scenario_cooling] = calculate_required_wind_capacity(
+                wind_capacities[scenario_cooling] = _calculate_wind_capacity_with_energy(
                     city=city,
                     cooling_type=scenario_cooling,
                     workload_file=workload_file,
@@ -138,7 +163,6 @@ def run_optimizations(
                     cut_in=wind_cut_in,
                     rated=wind_rated,
                     cut_out=wind_cut_out,
-                    progress=False,
                 )
             except Exception as exc:
                 wind_capacity_errors[scenario_cooling] = str(exc)
@@ -209,26 +233,78 @@ def run_optimizations(
                     print(f"  {scenario}/{objective} failed: {exc}")
 
     city_results = pd.DataFrame(rows)
-    summary = _build_summary_table(city_results, objective_list, cooling, hours)
-    country_summary = _build_country_summary_table(city_results, objective_list, cooling, hours)
-
-    suffix = f"{_filename_token(cooling)}_{_hours_token(hours)}"
-    city_results_file = output_path / f"strict_coastal_optimization_city_results_{suffix}.csv"
-    summary_file = output_path / f"strict_coastal_optimization_summary_{suffix}.csv"
-    country_summary_file = output_path / f"strict_coastal_optimization_country_summary_{suffix}.csv"
-    city_results.to_csv(city_results_file, index=False, encoding="utf-8-sig")
-    summary.to_csv(summary_file, index=False, encoding="utf-8-sig")
-    country_summary.to_csv(country_summary_file, index=False, encoding="utf-8-sig")
-
-    output_files = {
-        "city_results_csv": city_results_file,
-        "summary_csv": summary_file,
-        "country_summary_csv": country_summary_file,
-    }
-    print(f"City/objective results CSV: {city_results_file}")
-    print(f"Summary comparison CSV: {summary_file}")
-    print(f"Country scenario comparison CSV: {country_summary_file}")
+    summary = pd.DataFrame()
+    output_files = write_optimization_output_tables(
+        city_results,
+        output_path,
+        hours=hours,
+        country_metric_aggregation="sum",
+        default_growth_scenario="baseline",
+    )
+    print(json.dumps({key: str(path) for key, path in output_files.items()}, indent=2, ensure_ascii=False))
     return city_results, summary, output_files
+
+
+def _calculate_wind_capacity_with_energy(
+    *,
+    city: str,
+    cooling_type: str,
+    workload_file: str | Path,
+    rated_it_power_kw: float,
+    idle_power_fraction: float,
+    hours: int,
+    start_time: str | None,
+    time_alignment: str | None,
+    max_carbon_gap_hours: int,
+    hub_height_m: float,
+    loss_fraction: float,
+    cut_in: float,
+    rated: float,
+    cut_out: float,
+) -> WindCapacityWithEnergy:
+    energy = calculate_data_center_energy(
+        city=city,
+        cooling_type=cooling_type,
+        workload_file=workload_file,
+        rated_it_power_kw=rated_it_power_kw,
+        idle_power_fraction=idle_power_fraction,
+        hours=hours,
+        start_time=start_time,
+        time_alignment=time_alignment,
+        max_carbon_gap_hours=max_carbon_gap_hours,
+        progress=False,
+    )
+    wind_resource = calculate_wind_resource(
+        city=city,
+        hub_height_m=hub_height_m,
+        loss_fraction=loss_fraction,
+        cut_in=cut_in,
+        rated=rated,
+        cut_out=cut_out,
+    )
+    datacenter_total_energy_mwh = energy.total_energy_kwh / 1000.0
+    required_wind_capacity_mw = datacenter_total_energy_mwh / wind_resource.wind_generation_per_mw_mwh
+    return WindCapacityWithEnergy(
+        city=energy.city,
+        point_id=wind_resource.point_id,
+        wind_nc_file=wind_resource.wind_nc_file,
+        cooling_type=energy.cooling_type,
+        hours=energy.hours,
+        rated_it_power_kw=energy.rated_it_power_kw,
+        server_energy_kwh=energy.it_energy_kwh,
+        server_carbon_emissions_kgco2=energy.it_carbon_emissions_kgco2,
+        cooling_energy_kwh=energy.cooling_energy_kwh,
+        cooling_carbon_emissions_kgco2=energy.cooling_carbon_emissions_kgco2,
+        total_energy_kwh=energy.total_energy_kwh,
+        total_carbon_emissions_kgco2=energy.carbon_emissions_kgco2,
+        datacenter_total_energy_mwh=datacenter_total_energy_mwh,
+        wind_generation_per_mw_mwh=wind_resource.wind_generation_per_mw_mwh,
+        required_wind_capacity_mw=required_wind_capacity_mw,
+        annual_generation_mwh=required_wind_capacity_mw * wind_resource.wind_generation_per_mw_mwh,
+        mean_net_capacity_factor=wind_resource.mean_net_capacity_factor,
+        wind_start_time=wind_resource.wind_start_time,
+        wind_end_time=wind_resource.wind_end_time,
+    )
 
 
 def _city_result_row(
@@ -250,8 +326,15 @@ def _city_result_row(
             "wind_nc_file": wind_capacity.wind_nc_file,
             "rated_it_power_kw": wind_capacity.rated_it_power_kw,
             "hours": wind_capacity.hours,
+            "server_energy_kwh": wind_capacity.server_energy_kwh,
+            "server_carbon_emissions_kgco2": wind_capacity.server_carbon_emissions_kgco2,
+            "cooling_energy_kwh": wind_capacity.cooling_energy_kwh,
+            "cooling_carbon_emissions_kgco2": wind_capacity.cooling_carbon_emissions_kgco2,
+            "total_energy_kwh": wind_capacity.total_energy_kwh,
+            "total_carbon_emissions_kgco2": wind_capacity.total_carbon_emissions_kgco2,
             "required_wind_capacity_mw": wind_capacity.required_wind_capacity_mw,
             "datacenter_total_energy_mwh": wind_capacity.datacenter_total_energy_mwh,
+            "wind_annual_generation_mwh": wind_capacity.annual_generation_mwh,
             "wind_generation_per_mw_mwh": wind_capacity.wind_generation_per_mw_mwh,
             "wind_mean_net_capacity_factor": wind_capacity.mean_net_capacity_factor,
             "wind_start_time": wind_capacity.wind_start_time,
@@ -289,8 +372,15 @@ def _failed_row(
             "wind_nc_file": getattr(wind_capacity, "wind_nc_file", ""),
             "rated_it_power_kw": getattr(wind_capacity, "rated_it_power_kw", math.nan),
             "hours": getattr(wind_capacity, "hours", math.nan),
+            "server_energy_kwh": getattr(wind_capacity, "server_energy_kwh", math.nan),
+            "server_carbon_emissions_kgco2": getattr(wind_capacity, "server_carbon_emissions_kgco2", math.nan),
+            "cooling_energy_kwh": getattr(wind_capacity, "cooling_energy_kwh", math.nan),
+            "cooling_carbon_emissions_kgco2": getattr(wind_capacity, "cooling_carbon_emissions_kgco2", math.nan),
+            "total_energy_kwh": getattr(wind_capacity, "total_energy_kwh", math.nan),
+            "total_carbon_emissions_kgco2": getattr(wind_capacity, "total_carbon_emissions_kgco2", math.nan),
             "required_wind_capacity_mw": getattr(wind_capacity, "required_wind_capacity_mw", math.nan),
             "datacenter_total_energy_mwh": getattr(wind_capacity, "datacenter_total_energy_mwh", math.nan),
+            "wind_annual_generation_mwh": getattr(wind_capacity, "annual_generation_mwh", math.nan),
             "wind_generation_per_mw_mwh": getattr(wind_capacity, "wind_generation_per_mw_mwh", math.nan),
             "wind_mean_net_capacity_factor": getattr(wind_capacity, "mean_net_capacity_factor", math.nan),
             "wind_start_time": getattr(wind_capacity, "wind_start_time", None),

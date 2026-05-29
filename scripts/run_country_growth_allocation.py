@@ -41,8 +41,18 @@ from scripts.run_load_shift_and_battery_optimization import (
     SCENARIO_LABELS as OPTIMIZATION_SCENARIO_LABELS,
     _scenario_configs,
 )
-from utils.tools import (_resolve_baseline_alignment, _resolve_path, _pct, _resolve_output_dir, _hours_token, _number, _row_numeric_value,
-                         _numeric_sum, _numeric_mean, _text, _is_ready, _normalize_column, _row_value, _find_column, _capacity_to_mw,
+from utils.output_tables import (
+    append_scale_totals,
+    build_cooling_comparison_results,
+    build_country_average_results,
+    build_optimization_comparison_results,
+    select_all_scale_results,
+    write_cooling_output_tables,
+    write_csv as _write_csv,
+    write_optimization_output_tables,
+)
+from utils.tools import (_resolve_baseline_alignment, _resolve_path, _resolve_output_dir, _hours_token, _number,
+                         _text, _is_ready, _normalize_column, _find_column, _capacity_to_mw,
                          _capacity_unit_from_column, _scenario_label_from_column)
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
@@ -126,8 +136,15 @@ class RequiredWindCapacity:
     cooling_type: str
     rated_it_power_kw: float
     hours: int
+    server_energy_kwh: float
+    server_carbon_emissions_kgco2: float
+    cooling_energy_kwh: float
+    cooling_carbon_emissions_kgco2: float
+    total_energy_kwh: float
+    total_carbon_emissions_kgco2: float
     datacenter_total_energy_mwh: float
     required_wind_capacity_mw: float
+    wind_annual_generation_mwh: float
     wind_generation_per_mw_mwh: float
     mean_net_capacity_factor: float
     point_id: object
@@ -197,8 +214,9 @@ def run_country_growth_allocation(
         include_not_ready=include_not_ready,
     )
 
-    output_files = _write_foundation_outputs(output_path, country_growths, city_scale_allocations)
+    output_files: dict[str, Path] = {}
     if dry_run:
+        output_files.update(_write_foundation_outputs(output_path, country_growths, city_scale_allocations))
         print(f"Dry run complete. Foundation CSVs written under {output_path}")
         return output_files
 
@@ -312,7 +330,7 @@ def run_country_growth_cooling_comparison(
         city_rows=city_rows,
         scale_rows=scale_rows,
     )
-    output_files = _write_foundation_outputs(output_path, country_growths, city_scale_allocations)
+    output_files: dict[str, Path] = {}
     cache_locks_guard = threading.Lock()
     output_files.update(
         _run_country_growth_cooling_outputs(
@@ -382,7 +400,7 @@ def run_country_growth_load_shift_optimization(
         city_rows=city_rows,
         scale_rows=scale_rows,
     )
-    output_files = _write_foundation_outputs(output_path, country_growths, city_scale_allocations)
+    output_files: dict[str, Path] = {}
     cache_locks_guard = threading.Lock()
     output_files.update(
         _run_country_growth_load_shift_outputs(
@@ -475,13 +493,7 @@ def _run_country_growth_cooling_outputs(
 ) -> dict[str, Path]:
     suffix = _hours_token(hours)
     resolved_time_alignment = _resolve_baseline_alignment(start_time, time_alignment)
-    files = {
-        "cooling_city_summary_csv": output_path / f"country_growth_cooling_city_summary_{suffix}.csv",
-        "cooling_country_summary_csv": output_path / f"country_growth_cooling_country_summary_{suffix}.csv",
-        "cooling_issues_csv": output_path / f"country_growth_cooling_issues_{suffix}.csv",
-    }
-    if write_debug_scale_results:
-        files["cooling_scale_debug_csv"] = output_path / f"country_growth_cooling_scale_debug_{suffix}.csv"
+    files: dict[str, Path] = {}
     cache_dir = _country_growth_cache_dir(
         mode="cooling",
         suffix=suffix,
@@ -506,7 +518,7 @@ def _run_country_growth_cooling_outputs(
     countries = _ordered_unique(allocations["country"]) if "country" in allocations else []
 
     if not countries:
-        _write_cooling_outputs(pd.DataFrame(), files, write_debug_scale_results)
+        files.update(_write_cooling_outputs(pd.DataFrame(), output_path, hours, write_debug_scale_results))
         return files
 
     def run_country(country: object) -> tuple[object, pd.DataFrame]:
@@ -565,12 +577,11 @@ def _run_country_growth_cooling_outputs(
             task_key_columns=["cooling_type"],
             task_key_values=[(cooling_type,) for cooling_type in COOLING_TYPES],
         )
-        _write_cooling_outputs(completed_scale_results, files, write_debug_scale_results)
-        print(f"Cooling outputs refreshed after {country}: {files['cooling_country_summary_csv']}", flush=True)
+        files.update(_write_cooling_outputs(completed_scale_results, output_path, hours, write_debug_scale_results))
+        print(f"Cooling outputs refreshed after {country}: {output_path}", flush=True)
         _print_cooling_issue_summary(
             completed_scale_results,
             context=f"after {country}",
-            issue_file=files["cooling_issues_csv"],
         )
     return files
 
@@ -613,12 +624,7 @@ def _run_country_growth_load_shift_outputs(
         cooling=cooling,
         load_shift_fraction=load_shift_fraction,
     )
-    files = {
-        "load_shift_city_summary_csv": output_path / f"country_growth_load_shift_city_summary_{suffix}.csv",
-        "load_shift_country_summary_csv": output_path / f"country_growth_load_shift_country_summary_{suffix}.csv",
-    }
-    if write_debug_scale_results:
-        files["load_shift_scale_debug_csv"] = output_path / f"country_growth_load_shift_scale_debug_{suffix}.csv"
+    files: dict[str, Path] = {}
     cache_dir = _country_growth_cache_dir(
         mode="load_shift",
         suffix=suffix,
@@ -648,7 +654,7 @@ def _run_country_growth_load_shift_outputs(
     countries = _ordered_unique(allocations["country"]) if "country" in allocations else []
 
     if not countries:
-        _write_optimization_outputs(pd.DataFrame(), files, write_debug_scale_results)
+        files.update(_write_optimization_outputs(pd.DataFrame(), output_path, hours, write_debug_scale_results))
         return files
 
     task_key_values = [
@@ -734,32 +740,32 @@ def _run_country_growth_load_shift_outputs(
             task_key_columns=["optimization_scenario", "objective", "cooling_type"],
             task_key_values=task_key_values,
         )
-        _write_optimization_outputs(completed_scale_results, files, write_debug_scale_results)
-        print(f"Load-shift outputs refreshed after {country}: {files['load_shift_country_summary_csv']}", flush=True)
+        files.update(_write_optimization_outputs(completed_scale_results, output_path, hours, write_debug_scale_results))
+        print(f"Load-shift outputs refreshed after {country}: {output_path}", flush=True)
     return files
 
 
 def _write_cooling_outputs(
     cooling_city_scale: pd.DataFrame,
-    files: dict[str, Path],
+    output_path: Path,
+    hours: int | None,
     write_debug_scale_results: bool,
-) -> None:
+) -> dict[str, Path]:
     cooling_city_results = select_all_scale_results(
         append_scale_totals(cooling_city_scale, COOLING_METRICS, extra_group_columns=["cooling_type"])
     )
-    cooling_country_results = build_country_average_results(
+    files = write_cooling_output_tables(
         cooling_city_results,
-        metric_columns=COOLING_METRICS,
-        extra_group_columns=["cooling_type", "scale"],
+        output_path,
+        hours=hours,
+        country_metric_aggregation="mean",
+        default_growth_scenario="baseline",
     )
-    cooling_issues = build_cooling_issue_summary(cooling_city_scale)
-    cooling_city_summary = build_cooling_comparison_results(cooling_city_results)
-    cooling_country_summary = build_cooling_comparison_results(cooling_country_results)
-    _write_csv(cooling_city_summary, files["cooling_city_summary_csv"])
-    _write_csv(cooling_country_summary, files["cooling_country_summary_csv"])
-    _write_csv(cooling_issues, files["cooling_issues_csv"])
-    if write_debug_scale_results and "cooling_scale_debug_csv" in files:
-        _write_csv(cooling_city_scale, files["cooling_scale_debug_csv"])
+    if write_debug_scale_results:
+        debug_path = output_path / f"debug_cooling_scale_{_hours_token(hours)}.csv"
+        _write_csv(cooling_city_scale, debug_path)
+        files["debug_cooling_scale_csv"] = debug_path
+    return files
 
 
 def build_cooling_issue_summary(cooling_city_scale: pd.DataFrame) -> pd.DataFrame:
@@ -792,11 +798,10 @@ def _print_cooling_issue_summary(
     cooling_city_scale: pd.DataFrame,
     *,
     context: str,
-    issue_file: Path,
 ) -> None:
     issues = build_cooling_issue_summary(cooling_city_scale)
     if issues.empty:
-        print(f"Cooling issue summary {context}: 0 issue(s). Issue table: {issue_file}", flush=True)
+        print(f"Cooling issue summary {context}: 0 issue(s).", flush=True)
         return
     severity_counts = ", ".join(
         f"{severity}={count}" for severity, count in issues["severity"].value_counts().sort_index().items()
@@ -806,7 +811,7 @@ def _print_cooling_issue_summary(
     )
     print(
         f"Cooling issue summary {context}: {len(issues)} issue(s) "
-        f"({severity_counts}; {type_counts}). Issue table: {issue_file}",
+        f"({severity_counts}; {type_counts}).",
         flush=True,
     )
 
@@ -963,33 +968,29 @@ def _issue_text(value: object) -> str:
 
 def _write_optimization_outputs(
     optimization_city_scale: pd.DataFrame,
-    files: dict[str, Path],
+    output_path: Path,
+    hours: int | None,
     write_debug_scale_results: bool,
-) -> None:
+) -> dict[str, Path]:
     optimization_city_results = select_all_scale_results(
         append_scale_totals(
             optimization_city_scale,
-            OPTIMIZATION_RESULT_METRICS,
+            [*COOLING_METRICS, *OPTIMIZATION_RESULT_METRICS],
             extra_group_columns=["objective", "optimization_scenario", "optimization_scenario_label", "cooling_type"],
         )
     )
-    optimization_country_results = build_country_average_results(
+    files = write_optimization_output_tables(
         optimization_city_results,
-        metric_columns=OPTIMIZATION_RESULT_METRICS,
-        extra_group_columns=[
-            "objective",
-            "optimization_scenario",
-            "optimization_scenario_label",
-            "cooling_type",
-            "scale",
-        ],
+        output_path,
+        hours=hours,
+        country_metric_aggregation="mean",
+        default_growth_scenario="baseline",
     )
-    optimization_city_summary = build_optimization_comparison_results(optimization_city_results)
-    optimization_country_summary = build_optimization_comparison_results(optimization_country_results)
-    _write_csv(optimization_city_summary, files["load_shift_city_summary_csv"])
-    _write_csv(optimization_country_summary, files["load_shift_country_summary_csv"])
-    if write_debug_scale_results and "load_shift_scale_debug_csv" in files:
-        _write_csv(optimization_city_scale, files["load_shift_scale_debug_csv"])
+    if write_debug_scale_results:
+        debug_path = output_path / f"debug_load_shift_scale_{_hours_token(hours)}.csv"
+        _write_csv(optimization_city_scale, debug_path)
+        files["debug_load_shift_scale_csv"] = debug_path
+    return files
 
 
 def _country_growth_cache_dir(
@@ -1190,13 +1191,6 @@ def _sort_scale_results(results: pd.DataFrame) -> pd.DataFrame:
     if not sort_columns:
         return results.reset_index(drop=True)
     return results.sort_values(sort_columns, kind="stable").reset_index(drop=True)
-
-
-def _write_csv(frame: pd.DataFrame, path: Path) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary_path = path.with_name(f"{path.name}.tmp")
-    frame.to_csv(temporary_path, index=False, encoding="utf-8-sig")
-    temporary_path.replace(path)
 
 
 def _ordered_unique(values: pd.Series) -> list[object]:
@@ -1722,138 +1716,6 @@ def _load_shift_scenario_configs(
     )
 
 
-def append_scale_totals(
-    city_scale_results: pd.DataFrame,
-    metric_columns: list[str],
-    *,
-    extra_group_columns: list[str],
-) -> pd.DataFrame:
-    """Append all-scale city totals while preserving scale-level rows."""
-    if city_scale_results.empty:
-        return city_scale_results.copy()
-
-    group_columns = ["country", "growth_scenario", "city", *extra_group_columns]
-    total_rows: list[dict[str, object]] = []
-    for _, group in city_scale_results.groupby(group_columns, dropna=False, sort=True):
-        first = group.iloc[0].to_dict()
-        total_row = {column: first.get(column) for column in group_columns}
-        total_row.update(
-            {
-                "scale": "all_scales",
-                "city_count_in_country": first.get("city_count_in_country"),
-                "country_growth_mw": first.get("country_growth_mw"),
-                "city_growth_mw": first.get("city_growth_mw"),
-                "scale_share": 1.0,
-                "scale_capacity_mw": _numeric_sum(group, "scale_capacity_mw"),
-                "facility_count": int(_numeric_sum(group, "facility_count")),
-                "facility_capacity_mw": math.nan,
-                "below_scale_min": bool(group["below_scale_min"].fillna(False).astype(bool).any()),
-                "status": _combined_status(group),
-                "error_message": _combine_errors(group),
-            }
-        )
-        for metric in metric_columns:
-            total_row[metric] = _aggregate_city_metric(group, metric)
-        total_rows.append(total_row)
-
-    return pd.concat([city_scale_results, pd.DataFrame(total_rows)], ignore_index=True, sort=False)
-
-
-def select_all_scale_results(results: pd.DataFrame) -> pd.DataFrame:
-    """Return only city or country rows representing the combined all-scale result."""
-    if results.empty or "scale" not in results:
-        return results.copy().reset_index(drop=True)
-    return results[results["scale"] == "all_scales"].copy().reset_index(drop=True)
-
-
-def build_cooling_comparison_results(results: pd.DataFrame) -> pd.DataFrame:
-    """Compare seawater cooling against the air-source baseline."""
-    if results.empty:
-        return pd.DataFrame()
-    group_columns = [
-        column
-        for column in ["country", "growth_scenario", "city", "scale"]
-        if column in results.columns
-    ]
-    return _build_pairwise_comparison_results(
-        results=results,
-        group_columns=group_columns,
-        compare_column="cooling_type",
-        baseline_value="air_source",
-        candidate_values=("seawater",),
-        metric_columns=COOLING_METRICS,
-        baseline_prefix="air_source",
-        candidate_prefix="seawater",
-        savings_suffix="vs_air_source",
-    )
-
-
-def build_optimization_comparison_results(results: pd.DataFrame) -> pd.DataFrame:
-    """Compare optimization scenarios against the seawater baseline scenario."""
-    if results.empty:
-        return pd.DataFrame()
-    group_columns = [
-        column
-        for column in ["country", "growth_scenario", "city", "objective", "cooling_type", "scale"]
-        if column in results.columns
-    ]
-    candidate_values = [
-        str(value)
-        for value in results["optimization_scenario"].dropna().unique()
-        if str(value) not in {"baseline", "baseline_air_source"}
-    ]
-    return _build_pairwise_comparison_results(
-        results=results,
-        group_columns=group_columns,
-        compare_column="optimization_scenario",
-        baseline_value="baseline",
-        candidate_values=tuple(sorted(candidate_values)),
-        metric_columns=OPTIMIZATION_RESULT_METRICS,
-        baseline_prefix="baseline",
-        candidate_prefix_column="optimization_scenario",
-        savings_suffix="vs_baseline",
-        label_column="optimization_scenario_label",
-    )
-
-
-def build_country_average_results(
-    city_results: pd.DataFrame,
-    *,
-    metric_columns: list[str],
-    extra_group_columns: list[str],
-) -> pd.DataFrame:
-    """Average city results within each country, scenario, and comparison group."""
-    if city_results.empty:
-        return city_results.copy()
-    group_columns = ["country", "growth_scenario", *extra_group_columns]
-    rows: list[dict[str, object]] = []
-    for _, group in city_results.groupby(group_columns, dropna=False, sort=True):
-        first = group.iloc[0].to_dict()
-        city_count = int(group["city"].nunique()) if "city" in group else len(group)
-        row = {column: first.get(column) for column in group_columns}
-        row.update(
-            {
-                "representative_city_count": city_count,
-                "country_growth_mw": first.get("country_growth_mw"),
-                "average_city_growth_mw": _numeric_mean(group, "city_growth_mw"),
-                "scale": first.get("scale"),
-                "scale_share": first.get("scale_share"),
-                "average_scale_capacity_mw": _numeric_mean(group, "scale_capacity_mw"),
-                "average_facility_count": _numeric_mean(group, "facility_count"),
-                "average_facility_capacity_mw": _numeric_mean(group, "facility_capacity_mw"),
-                "below_scale_min_city_count": int(group["below_scale_min"].fillna(False).astype(bool).sum())
-                if "below_scale_min" in group
-                else 0,
-                "status": _combined_status(group),
-                "error_message": _combine_errors(group),
-            }
-        )
-        for metric in metric_columns:
-            row[metric] = _aggregate_country_metric(group, metric)
-        rows.append(row)
-    return pd.DataFrame(rows)
-
-
 def _run_parallel_tasks(
     tasks: list[object],
     run_task: Callable[[object], tuple[int, dict[str, object]]],
@@ -1870,113 +1732,6 @@ def _run_parallel_tasks(
             for future in as_completed(futures):
                 completed.append(future.result())
     return [row for _, row in sorted(completed, key=lambda item: item[0])]
-
-
-def _build_pairwise_comparison_results(
-    *,
-    results: pd.DataFrame,
-    group_columns: list[str],
-    compare_column: str,
-    baseline_value: str,
-    candidate_values: tuple[str, ...],
-    metric_columns: list[str],
-    baseline_prefix: str,
-    savings_suffix: str,
-    candidate_prefix: str | None = None,
-    candidate_prefix_column: str | None = None,
-    label_column: str | None = None,
-) -> pd.DataFrame:
-    if compare_column not in results.columns:
-        return pd.DataFrame()
-    rows: list[dict[str, object]] = []
-    for _, group in results.groupby(group_columns, dropna=False, sort=True):
-        baseline = _first_matching_row(group, compare_column, baseline_value)
-        for candidate_value in candidate_values:
-            candidate = _first_matching_row(group, compare_column, candidate_value)
-            if baseline is None and candidate is None:
-                continue
-            source = candidate if candidate is not None else baseline
-            assert source is not None
-            row = _comparison_metadata(source, group_columns)
-            metric_candidate_prefix = (
-                "comparison"
-                if candidate_prefix_column is not None
-                else str(candidate_prefix or candidate_value)
-            )
-            row.update(
-                {
-                    "comparison": f"{candidate_value}_vs_{baseline_value}",
-                    f"baseline_{compare_column}": baseline_value,
-                    f"comparison_{compare_column}": candidate_value,
-                    "baseline_status": _row_value(baseline, "status", "missing"),
-                    "comparison_status": _row_value(candidate, "status", "missing"),
-                    "status": _comparison_status(baseline, candidate),
-                    "error_message": _comparison_error_message(baseline, candidate),
-                }
-            )
-            if label_column:
-                row[f"comparison_{label_column}"] = _row_value(candidate, label_column, candidate_value)
-            for metadata_column in _COMPARISON_METADATA_COLUMNS:
-                if metadata_column in source.index and metadata_column not in row:
-                    row[metadata_column] = source[metadata_column]
-            for metric in metric_columns:
-                baseline_metric = _row_numeric_value(baseline, metric)
-                candidate_metric = _row_numeric_value(candidate, metric)
-                savings = baseline_metric - candidate_metric
-                row[f"{baseline_prefix}_{metric}"] = baseline_metric
-                row[f"{metric_candidate_prefix}_{metric}"] = candidate_metric
-                row[f"{metric}_savings_{savings_suffix}"] = savings
-                row[f"{metric}_savings_pct_{savings_suffix}"] = _pct(savings, baseline_metric)
-            rows.append(row)
-    return pd.DataFrame(rows)
-
-
-_COMPARISON_METADATA_COLUMNS = [
-    "representative_city_count",
-    "city_count_in_country",
-    "country_growth_mw",
-    "city_growth_mw",
-    "average_city_growth_mw",
-    "scale",
-    "scale_share",
-    "scale_capacity_mw",
-    "average_scale_capacity_mw",
-    "facility_count",
-    "average_facility_count",
-    "below_scale_min",
-    "below_scale_min_city_count",
-]
-
-
-def _first_matching_row(group: pd.DataFrame, column: str, value: str) -> pd.Series | None:
-    matches = group[group[column].astype(str) == value]
-    if matches.empty:
-        return None
-    return matches.iloc[0]
-
-
-def _comparison_metadata(source: pd.Series, group_columns: list[str]) -> dict[str, object]:
-    return {column: source[column] for column in group_columns if column in source.index}
-
-
-def _comparison_status(baseline: pd.Series | None, candidate: pd.Series | None) -> str:
-    if baseline is None or candidate is None:
-        return "failed"
-    statuses = {str(_row_value(baseline, "status", "")), str(_row_value(candidate, "status", ""))}
-    return "ok" if statuses == {"ok"} else "failed"
-
-
-def _comparison_error_message(baseline: pd.Series | None, candidate: pd.Series | None) -> str:
-    errors: list[str] = []
-    if baseline is None:
-        errors.append("Missing baseline row")
-    if candidate is None:
-        errors.append("Missing comparison row")
-    for label, row in (("baseline", baseline), ("comparison", candidate)):
-        message = str(_row_value(row, "error_message", "") or "").strip()
-        if message:
-            errors.append(f"{label}: {message}")
-    return "; ".join(errors)
 
 
 def _get_energy_result(
@@ -2139,8 +1894,15 @@ def _get_required_wind_capacity(
                     cooling_type=cooling_type,
                     rated_it_power_kw=float(rated_it_power_kw),
                     hours=energy.hours,
+                    server_energy_kwh=energy.it_energy_kwh,
+                    server_carbon_emissions_kgco2=energy.it_carbon_emissions_kgco2,
+                    cooling_energy_kwh=energy.cooling_energy_kwh,
+                    cooling_carbon_emissions_kgco2=energy.cooling_carbon_emissions_kgco2,
+                    total_energy_kwh=energy.total_energy_kwh,
+                    total_carbon_emissions_kgco2=energy.carbon_emissions_kgco2,
                     datacenter_total_energy_mwh=datacenter_total_energy_mwh,
                     required_wind_capacity_mw=required_wind_capacity_mw,
+                    wind_annual_generation_mwh=required_wind_capacity_mw * wind_resource.wind_generation_per_mw_mwh,
                     wind_generation_per_mw_mwh=wind_resource.wind_generation_per_mw_mwh,
                     mean_net_capacity_factor=wind_resource.mean_net_capacity_factor,
                     point_id=wind_resource.point_id,
@@ -2263,6 +2025,12 @@ def _optimization_result_row(
             "error_message": "",
             "hours": wind_capacity.hours,
             "rated_it_power_kw_per_facility": wind_capacity.rated_it_power_kw,
+            "server_energy_kwh": wind_capacity.server_energy_kwh * multiplier,
+            "server_carbon_emissions_kgco2": wind_capacity.server_carbon_emissions_kgco2 * multiplier,
+            "cooling_energy_kwh": wind_capacity.cooling_energy_kwh * multiplier,
+            "cooling_carbon_emissions_kgco2": wind_capacity.cooling_carbon_emissions_kgco2 * multiplier,
+            "total_energy_kwh": wind_capacity.total_energy_kwh * multiplier,
+            "total_carbon_emissions_kgco2": wind_capacity.total_carbon_emissions_kgco2 * multiplier,
             "point_id": wind_capacity.point_id,
             "wind_nc_file": wind_capacity.wind_nc_file,
             "wind_generation_per_mw_mwh": wind_capacity.wind_generation_per_mw_mwh,
@@ -2272,8 +2040,9 @@ def _optimization_result_row(
         }
     )
     row.update(clean_result)
-    row["required_wind_capacity_mw"] = wind_capacity.required_wind_capacity_mw
-    row["datacenter_total_energy_mwh"] = wind_capacity.datacenter_total_energy_mwh
+    row["required_wind_capacity_mw"] = wind_capacity.required_wind_capacity_mw * multiplier
+    row["datacenter_total_energy_mwh"] = wind_capacity.datacenter_total_energy_mwh * multiplier
+    row["wind_annual_generation_mwh"] = wind_capacity.wind_annual_generation_mwh * multiplier
     _scale_optimization_metrics(row, multiplier)
     if "wind_coverage_mwh" not in row or pd.isna(row.get("wind_coverage_mwh")):
         demand = float(row.get("annual_demand_mwh", row.get("datacenter_total_energy_mwh", 0.0)) or 0.0)
@@ -2313,6 +2082,8 @@ def _zero_cooling_row(row: dict[str, object], hours: int | None) -> dict[str, ob
 
 def _zero_optimization_row(row: dict[str, object], hours: int | None) -> dict[str, object]:
     row.update({"status": "ok", "error_message": "", "hours": hours})
+    for metric in COOLING_METRICS:
+        row[metric] = 0.0
     for metric in OPTIMIZATION_RESULT_METRICS:
         row[metric] = 0.0
     return row
@@ -2324,44 +2095,6 @@ def _failed_row(row: dict[str, object], error_message: str) -> dict[str, object]
     return row
 
 
-def _aggregate_city_metric(group: pd.DataFrame, metric: str) -> float:
-    if metric not in group:
-        return math.nan
-    values = pd.to_numeric(group[metric], errors="coerce")
-    if metric in {
-        "average_grid_carbon_intensity_g_per_kwh",
-        "renewable_physical_coverage_fraction",
-        "load_movement_budget_used_fraction",
-    }:
-        return float(values.mean()) if values.notna().any() else math.nan
-    return float(values.sum()) if values.notna().any() else math.nan
-
-
-def _aggregate_country_metric(group: pd.DataFrame, metric: str) -> float:
-    if metric not in group:
-        return math.nan
-    values = pd.to_numeric(group[metric], errors="coerce")
-    return float(values.mean()) if values.notna().any() else math.nan
-
-
-def _combined_status(group: pd.DataFrame) -> str:
-    if "status" not in group:
-        return ""
-    statuses = set(group["status"].dropna().astype(str))
-    if statuses == {"ok"}:
-        return "ok"
-    if "failed" in statuses:
-        return "failed"
-    return "|".join(sorted(statuses))
-
-
-def _combine_errors(group: pd.DataFrame) -> str:
-    if "error_message" not in group:
-        return ""
-    errors = sorted({str(error) for error in group["error_message"].dropna() if str(error).strip()})
-    return "; ".join(errors)
-
-
 def _write_foundation_outputs(
     output_path: Path,
     country_growths: pd.DataFrame,
@@ -2371,8 +2104,8 @@ def _write_foundation_outputs(
         "country_growths_csv": output_path / "country_growths.csv",
         "city_scale_allocations_csv": output_path / "city_scale_allocations.csv",
     }
-    country_growths.to_csv(files["country_growths_csv"], index=False, encoding="utf-8-sig")
-    city_scale_allocations.to_csv(files["city_scale_allocations_csv"], index=False, encoding="utf-8-sig")
+    _write_csv(country_growths, files["country_growths_csv"])
+    _write_csv(city_scale_allocations, files["city_scale_allocations_csv"])
     for label, path in files.items():
         print(f"{label}: {path}")
     return files

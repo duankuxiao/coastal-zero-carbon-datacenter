@@ -19,6 +19,7 @@ data/offshore_wind_download_toolkit/strict_coastal_download_manifest.csv.
 from __future__ import annotations
 
 import argparse
+import json
 import math
 from pathlib import Path
 
@@ -35,22 +36,11 @@ from energy.calculate_datacenter_energy import (
     load_city_manifest,
 )
 from renewables.calculate_wind_capacity import WindResourceResult, calculate_wind_resource
-from utils.tools import _pct, _resolve_baseline_alignment, _resolve_path, _output_suffix
+from utils.output_tables import write_cooling_output_tables
+from utils.tools import _resolve_baseline_alignment, _resolve_path
 
 
-ROOT_DIR = Path(__file__).resolve().parent
-
-RESULT_METRICS = [
-    "server_energy_kwh",
-    "server_carbon_emissions_kgco2",
-    "cooling_energy_kwh",
-    "cooling_carbon_emissions_kgco2",
-    "total_energy_kwh",
-    "total_carbon_emissions_kgco2",
-    "required_wind_capacity_mw",
-    "wind_annual_generation_mwh",
-]
-
+ROOT_DIR = Path(__file__).resolve().parent.parent
 
 def run_baseline(
         workload_file: str | Path = WORKLOAD_FILE,
@@ -66,7 +56,7 @@ def run_baseline(
         wind_rated: float = 12.0,
         wind_cut_out: float = 25.0,
         output_dir: str | Path = DEFAULT_OUTPUT_DIR,
-) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, Path]]:
     """Run the coastal baseline and save city, aggregate, and country result tables."""
     output_path = Path(output_dir)
     if not output_path.is_absolute():
@@ -140,23 +130,13 @@ def run_baseline(
 
     air_results = pd.DataFrame(air_rows)
     seawater_results = pd.DataFrame(seawater_rows)
-    summary = _build_summary_table(air_results, seawater_results, rated_it_power_kw, hours)
-    country_summary = _build_country_improvement_table(
-        air_results=air_results,
-        seawater_results=seawater_results,
-        rated_it_power_kw=rated_it_power_kw,
+    output_files = write_cooling_output_tables(
+        pd.concat([air_results, seawater_results], ignore_index=True, sort=False),
+        output_path,
         hours=hours,
+        country_metric_aggregation="sum",
+        default_growth_scenario="baseline",
     )
-
-    suffix = _output_suffix(rated_it_power_kw, hours)
-    air_file = output_path / f"baseline_air_source_results_{suffix}.csv"
-    seawater_file = output_path / f"baseline_seawater_results_{suffix}.csv"
-    summary_file = output_path / f"baseline_summary_{suffix}.csv"
-    country_summary_file = output_path / f"baseline_country_seawater_improvement_{suffix}.csv"
-    air_results.to_csv(air_file, index=False, encoding="utf-8-sig")
-    seawater_results.to_csv(seawater_file, index=False, encoding="utf-8-sig")
-    summary.to_csv(summary_file, index=False, encoding="utf-8-sig")
-    country_summary.to_csv(country_summary_file, index=False, encoding="utf-8-sig")
 
     included_count = int(air_results["city"].nunique()) if not air_results.empty else 0
     print(f"Toolkit-ready coastal cities found: {len(cities)}")
@@ -164,12 +144,9 @@ def run_baseline(
     print(f"Cities skipped: {len(skipped)}")
     for city, reason in skipped:
         print(f"Skipped {city}: {reason}")
-    print(f"Air-source results CSV: {air_file}")
-    print(f"Seawater results CSV: {seawater_file}")
-    print(f"Summary CSV: {summary_file}")
-    print(f"Country seawater improvement CSV: {country_summary_file}")
+    print(json.dumps({key: str(path) for key, path in output_files.items()}, indent=2, ensure_ascii=False))
 
-    return air_results, seawater_results, summary
+    return air_results, seawater_results, output_files
 
 
 def _build_city_result_row(
@@ -209,205 +186,6 @@ def _build_city_result_row(
         "wind_start_time": wind.wind_start_time,
         "wind_end_time": wind.wind_end_time,
     }
-
-
-def _build_summary_table(
-        air_results: pd.DataFrame,
-        seawater_results: pd.DataFrame,
-        rated_it_power_kw: float,
-        hours: int | None,
-) -> pd.DataFrame:
-    rows = [
-        _aggregate_result_rows(
-            label="air_source_all_regions",
-            value_type="absolute",
-            results=air_results,
-            rated_it_power_kw=rated_it_power_kw,
-            hours=hours,
-        ),
-        _aggregate_result_rows(
-            label="seawater_all_regions",
-            value_type="absolute",
-            results=seawater_results,
-            rated_it_power_kw=rated_it_power_kw,
-            hours=hours,
-        ),
-    ]
-    rows.append(
-        _build_savings_pct_row(
-            air_row=rows[0],
-            seawater_row=rows[1],
-            rated_it_power_kw=rated_it_power_kw,
-            hours=hours,
-        )
-    )
-    return pd.DataFrame(rows)
-
-
-def _build_country_improvement_table(
-        air_results: pd.DataFrame,
-        seawater_results: pd.DataFrame,
-        rated_it_power_kw: float,
-        hours: int | None,
-) -> pd.DataFrame:
-    columns = [
-        "country",
-        "included_city_count",
-        "hours_per_city",
-        "rated_it_power_kw_per_city",
-        "air_source_total_energy_kwh",
-        "seawater_total_energy_kwh",
-        "total_energy_savings_kwh",
-        "total_energy_savings_pct",
-        "air_source_total_carbon_emissions_kgco2",
-        "seawater_total_carbon_emissions_kgco2",
-        "total_carbon_emissions_savings_kgco2",
-        "total_carbon_emissions_savings_pct",
-        "air_source_cooling_energy_kwh",
-        "seawater_cooling_energy_kwh",
-        "cooling_energy_savings_kwh",
-        "cooling_energy_savings_pct",
-        "air_source_cooling_carbon_emissions_kgco2",
-        "seawater_cooling_carbon_emissions_kgco2",
-        "cooling_carbon_emissions_savings_kgco2",
-        "cooling_carbon_emissions_savings_pct",
-        "air_source_required_wind_capacity_mw",
-        "seawater_required_wind_capacity_mw",
-        "required_wind_capacity_reduction_mw",
-        "required_wind_capacity_reduction_pct",
-    ]
-    if air_results.empty or seawater_results.empty:
-        return pd.DataFrame(columns=columns)
-
-    merged = air_results.merge(
-        seawater_results,
-        on=["country", "city"],
-        suffixes=("_air_source", "_seawater"),
-        how="inner",
-    )
-    if merged.empty:
-        return pd.DataFrame(columns=columns)
-
-    rows: list[dict[str, object]] = []
-    for country, group in merged.groupby("country", dropna=False, sort=True):
-        row = {
-            "country": country,
-            "included_city_count": int(group["city"].nunique()),
-            "hours_per_city": "all_available" if hours is None else hours,
-            "rated_it_power_kw_per_city": rated_it_power_kw,
-        }
-        _add_country_metric(
-            row,
-            group,
-            source_column="total_energy_kwh_air_source",
-            seawater_column="total_energy_kwh_seawater",
-            air_output="air_source_total_energy_kwh",
-            seawater_output="seawater_total_energy_kwh",
-            delta_output="total_energy_savings_kwh",
-            pct_output="total_energy_savings_pct",
-        )
-        _add_country_metric(
-            row,
-            group,
-            source_column="total_carbon_emissions_kgco2_air_source",
-            seawater_column="total_carbon_emissions_kgco2_seawater",
-            air_output="air_source_total_carbon_emissions_kgco2",
-            seawater_output="seawater_total_carbon_emissions_kgco2",
-            delta_output="total_carbon_emissions_savings_kgco2",
-            pct_output="total_carbon_emissions_savings_pct",
-        )
-        _add_country_metric(
-            row,
-            group,
-            source_column="cooling_energy_kwh_air_source",
-            seawater_column="cooling_energy_kwh_seawater",
-            air_output="air_source_cooling_energy_kwh",
-            seawater_output="seawater_cooling_energy_kwh",
-            delta_output="cooling_energy_savings_kwh",
-            pct_output="cooling_energy_savings_pct",
-        )
-        _add_country_metric(
-            row,
-            group,
-            source_column="cooling_carbon_emissions_kgco2_air_source",
-            seawater_column="cooling_carbon_emissions_kgco2_seawater",
-            air_output="air_source_cooling_carbon_emissions_kgco2",
-            seawater_output="seawater_cooling_carbon_emissions_kgco2",
-            delta_output="cooling_carbon_emissions_savings_kgco2",
-            pct_output="cooling_carbon_emissions_savings_pct",
-        )
-        _add_country_metric(
-            row,
-            group,
-            source_column="required_wind_capacity_mw_air_source",
-            seawater_column="required_wind_capacity_mw_seawater",
-            air_output="air_source_required_wind_capacity_mw",
-            seawater_output="seawater_required_wind_capacity_mw",
-            delta_output="required_wind_capacity_reduction_mw",
-            pct_output="required_wind_capacity_reduction_pct",
-        )
-        rows.append(row)
-
-    return pd.DataFrame(rows, columns=columns)
-
-
-def _add_country_metric(
-        row: dict[str, object],
-        group: pd.DataFrame,
-        source_column: str,
-        seawater_column: str,
-        air_output: str,
-        seawater_output: str,
-        delta_output: str,
-        pct_output: str,
-) -> None:
-    air_value = float(group[source_column].sum())
-    seawater_value = float(group[seawater_column].sum())
-    delta = air_value - seawater_value
-    row[air_output] = air_value
-    row[seawater_output] = seawater_value
-    row[delta_output] = delta
-    row[pct_output] = _pct(delta, air_value)
-
-
-def _aggregate_result_rows(
-        label: str,
-        value_type: str,
-        results: pd.DataFrame,
-        rated_it_power_kw: float,
-        hours: int | None,
-) -> dict[str, object]:
-    row: dict[str, object] = {
-        "scope": label,
-        "value_type": value_type,
-        "included_city_count": int(results["city"].nunique()) if not results.empty else 0,
-        "hours_per_city": "all_available" if hours is None else hours,
-        "rated_it_power_kw_per_city": rated_it_power_kw,
-    }
-    for metric in RESULT_METRICS:
-        row[metric] = float(results[metric].sum()) if metric in results and not results.empty else 0.0
-    return row
-
-
-def _build_savings_pct_row(
-        air_row: dict[str, object],
-        seawater_row: dict[str, object],
-        rated_it_power_kw: float,
-        hours: int | None,
-) -> dict[str, object]:
-    row: dict[str, object] = {
-        "scope": "seawater_savings_pct_vs_air_source",
-        "value_type": "percent",
-        "included_city_count": min(
-            int(air_row.get("included_city_count", 0)),
-            int(seawater_row.get("included_city_count", 0)),
-        ),
-        "hours_per_city": "all_available" if hours is None else hours,
-        "rated_it_power_kw_per_city": rated_it_power_kw,
-    }
-    for metric in RESULT_METRICS:
-        row[metric] = _pct(float(air_row.get(metric, 0.0)) - float(seawater_row.get(metric, 0.0)), air_row.get(metric, 0.0))
-    return row
 
 
 def _valid_nonzero_city_series(
