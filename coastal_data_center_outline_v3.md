@@ -421,13 +421,15 @@ R'_{hourly,i}=\frac{\sum_t \min(G_{OW,i,t},L'_{DC,i,t})}{\sum_t L'_{DC,i,t}}
 > 
 > 敏感性分析 
 > 
-> 1. 服务器空转能耗比例 idle-power-fraction 10% 23% 45%
+> 1. 服务器空转能耗比例 idle-power-fraction = 10% 23% 45%
 > 
-> 2. 负荷迁移比例 load-shift-fraction  10% 30% 50%
+> 2. 负荷迁移比例 load-shift-fraction = 10% 30% 50%
 > 
-> 3. 风电损失 wind-loss-fraction 0.10  0.15  0.30
+> 3. 风电损失 wind-loss-fraction = 0.10  0.15  0.30
 > 
-> 4. 海水温度 sst_fraction 0.9  1  1.1
+> 4. 海水温度 sst_fraction = 0.9  1  1.1
+> 
+> 5. 优化目标 objectives = min-grid-co2 / min-grid-mwh
 
 ---
 

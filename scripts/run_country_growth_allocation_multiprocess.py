@@ -2544,7 +2544,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         help="Write scale-level cooling and optimization debug CSVs in addition to all-scale paper outputs.",
     )
     parser.add_argument("--workload-file", default=str(WORKLOAD_FILE))
-    parser.add_argument("--idle-power-fraction", type=float, default=0.3, help="0.1 0.23 0.35")
+    parser.add_argument("--idle-power-fraction", type=float, default=0.23, help="0.1 0.23 0.35")
     parser.add_argument("--hours", type=int, default=8760)
     parser.add_argument("--start-time", default="2025-01-01 00:00")
     parser.add_argument("--time-alignment", choices=["sst", "latest", "start_time"], default=None)
@@ -2576,7 +2576,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
 
 if __name__ == "__main__":
     args = _build_arg_parser().parse_args(sys.argv[1:])
-    args.mode = 'load-shift'   # ["cooling", "load-shift"]
+    args.mode = 'all'   # ["all", "cooling", "load-shift"]
     args.workers = 2
     mode = _normalize_mode(args.mode)
 
