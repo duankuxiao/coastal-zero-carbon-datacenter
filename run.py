@@ -239,6 +239,7 @@ def run_configured_cases(
     sst_fraction: float | None = None,
     grid_import_limit_mw: float | None = None,
     load_shift_fraction: float | None = None,
+    optimization_objective: str | None = None,
     hub_height_m: float | None = None,
     wind_loss_fraction: float | None = None,
     wind_cut_in: float | None = None,
@@ -256,6 +257,14 @@ def run_configured_cases(
     config_path = _resolve_path(config_file, ROOT_DIR)
     config = _load_run_config(config_path)
     cases = _normalize_run_cases(config.get("cases"))
+    if optimization_objective is not None:
+        objective_value = _normalize_optimization_objective(optimization_objective)
+        cases = tuple(
+            {**case, "optimization_objectives": (objective_value,)}
+            if bool(case["optimization_enabled"])
+            else case
+            for case in cases
+        )
 
     manifest_value = manifest_file if manifest_file is not None else config.get("manifest_file", CITY_MAP_FILE)
     output_value = output_dir if output_dir is not None else config.get("output_dir", DEFAULT_OUTPUT_DIR)
@@ -2329,23 +2338,31 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Write scale-level cooling and optimization debug CSVs in addition to all-scale paper outputs.",
     )
-    parser.add_argument("--idle-power-fraction", type=float, default=0.23, help="Override idle_power_fraction. sensitivity: 0.1 / default 0.23 / 0.35")
+    parser.add_argument("--idle-power-fraction", type=float, default=None, help="Override idle_power_fraction. sensitivity: 0.1 / default 0.23 / 0.35")
     parser.add_argument("--hours", type=int, default=None, help="Override hours.")
     parser.add_argument("--start-time", default=None, help="Override start_time.")
     parser.add_argument("--time-alignment", choices=["sst", "latest", "start_time"], default=None)
     parser.add_argument("--max-carbon-gap-hours", type=int, default=None)
-    parser.add_argument("--sst-fraction", dest="sst_fraction", type=float, default=1.0, help="sensitivity: 0.9 / default 1.0 / 1.1")
+    parser.add_argument("--sst-fraction", dest="sst_fraction", type=float, default=None, help="sensitivity: 0.9 / default 1.0 / 1.1")
     parser.add_argument("--grid-import-limit-mw", type=float, default=None)
-    parser.add_argument("--load-shift-fraction", type=float, default=0.3, help="sensitivity:  0.15 / default 0.3 / 0.45")
+    parser.add_argument("--load-shift-fraction", type=float, default=None, help="sensitivity:  0.15 / default 0.3 / 0.45")
     parser.add_argument("--hub-height-m", type=float, default=None)
-    parser.add_argument("--wind-loss-fraction", type=float, default=0.15, help="sensitivity:  0.1 / default 0.15 / 0.2")
+    parser.add_argument("--wind-loss-fraction", type=float, default=None, help="sensitivity:  0.1 / default 0.15 / 0.2")
+    parser.add_argument(
+        "--optimization-objective",
+        "--optimization_objective",
+        dest="optimization_objective",
+        type=str,
+        default=None,
+        help="Override optimization objective in optimization cases. sensitivity: default co2 / mwh",
+    )
     parser.add_argument("--wind-cut-in", type=float, default=None)
     parser.add_argument("--wind-rated", type=float, default=None)
     parser.add_argument("--wind-cut-out", type=float, default=None)
     parser.add_argument(
         "--workers",
         type=int,
-        default=2,
+        default=None,
         help=(
             "Number of worker processes for cooling and optimization calculations. "
             "If omitted, the value from the config is used."
@@ -2371,6 +2388,7 @@ if __name__ == "__main__":
         sst_fraction=args.sst_fraction,
         grid_import_limit_mw=args.grid_import_limit_mw,
         load_shift_fraction=args.load_shift_fraction,
+        optimization_objective=args.optimization_objective,
         hub_height_m=args.hub_height_m,
         wind_loss_fraction=args.wind_loss_fraction,
         wind_cut_in=args.wind_cut_in,

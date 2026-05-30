@@ -26,7 +26,9 @@
 .
 ├── run.py                                      # 当前主批量入口，读取配置并运行国家增长情景
 ├── scripts/
-│   └── run_config.txt                         # run.py 默认配置文件，JSON 格式
+│   ├── run_config.txt                         # run.py 默认配置文件，JSON 格式
+│   ├── sensitivity_run_config.txt             # 敏感性分析配置文件
+│   └── run_sensitivity_sweep.py               # 敏感性分析批量运行脚本
 ├── energy/
 │   ├── calculate_datacenter_energy.py         # 单城市能耗/排放计算入口
 │   ├── datacenter.py                          # 数据中心 IT 与 HVAC 详细模型
@@ -154,6 +156,7 @@ python run.py --countries China Japan --hours 8760 --start-time "2025-01-01 00:0
 - `--max-countries`：只运行筛选后的前 N 个国家，适合快速验证。
 - `--write-debug-scale-results`：额外输出 scale-level 中间结果。
 - `--idle-power-fraction`、`--sst-fraction`、`--load-shift-fraction`、`--wind-loss-fraction`：敏感性分析参数。
+- `--optimization-objective`：覆盖优化 case 的目标，支持 `co2` / `min-grid-co2` 和 `mwh` / `min-grid-mwh`。
 - `--workers`：并发 worker 数。默认配置为 2，可按机器资源调整。
 
 配置文件中的 `cases` 控制运行内容。case 字段包括：
@@ -162,6 +165,49 @@ python run.py --countries China Japan --hours 8760 --start-time "2025-01-01 00:0
 - `optimization_enabled`：`false` 表示只做冷却/风机容量基准，`true` 表示运行负荷转移优化。
 - `optimization_method`：当前支持 `baseline` 和 `load_shift`。
 - `optimization_objective` 或 `optimization_objectives`：支持 `co2` / `min-grid-co2` 和 `mwh` / `min-grid-mwh`。
+
+## 敏感性分析批量运行
+
+敏感性分析配置位于 `scripts/sensitivity_run_config.txt`。该文件与普通 `run.py` 配置保持兼容，并额外包含 `sensitivity_parameters`，用于记录以下五个敏感性分析参数的默认值和备选值：
+
+- `idle_power_fraction`：`0.1 / 0.23 / 0.35`
+- `sst_fraction`：`0.9 / 1.0 / 1.1`
+- `load_shift_fraction`：`0.15 / 0.3 / 0.45`
+- `wind_loss_fraction`：`0.1 / 0.15 / 0.2`
+- `optimization_objective`：`co2 / mwh`
+
+默认的一次一因子敏感性分析会运行 10 组配置：基准组、4 个数值参数的 low/high 变化，以及 `optimization_objective=mwh`。每组结果写入独立子目录：
+
+```bash
+python scripts/run_sensitivity_sweep.py
+```
+
+运行前可先预览全部任务：
+
+```bash
+python scripts/run_sensitivity_sweep.py --list-jobs
+```
+
+常用快速验证参数同样可传给 sweep 脚本：
+
+```bash
+python scripts/run_sensitivity_sweep.py --max-countries 1 --hours 24 --workers 2
+```
+
+默认输出目录为 `results/sensitivity/<job_label>/`，例如：
+
+```text
+results/sensitivity/baseline/
+results/sensitivity/idle_power_fraction_low/
+results/sensitivity/sst_fraction_high/
+results/sensitivity/optimization_objective_mwh/
+```
+
+如果需要运行全部组合，可使用 full-factorial 模式。该模式会生成 `3^4 * 2 = 162` 组运行，计算量明显更大：
+
+```bash
+python scripts/run_sensitivity_sweep.py --mode full-factorial
+```
 
 ## 输出文件
 

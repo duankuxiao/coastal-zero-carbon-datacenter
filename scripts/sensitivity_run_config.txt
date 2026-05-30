@@ -1,0 +1,75 @@
+{
+  "output_dir": "results/sensitivity",
+  "manifest_file": "data/coastal_datacenter_city_manifest.xlsx",
+  "workload_file": "data/Workload/GoogleClusteData_CPU_Data_Hourly_1.csv",
+  "include_not_ready": false,
+  "hours": 8760,
+  "start_time": "2025-01-01 00:00",
+  "time_alignment": null,
+  "max_carbon_gap_hours": 6,
+  "sst_fraction": 1.0,
+  "idle_power_fraction": 0.23,
+  "battery_roundtrip_efficiency": 0.97,
+  "grid_import_limit_mw": null,
+  "load_shift_fraction": 0.3,
+  "hub_height_m": 150.0,
+  "wind_loss_fraction": 0.15,
+  "wind_cut_in": 3.0,
+  "wind_rated": 12.0,
+  "wind_cut_out": 25.0,
+  "workers": 2,
+  "sensitivity_parameters": {
+    "idle_power_fraction": {
+      "low": 0.1,
+      "default": 0.23,
+      "high": 0.35
+    },
+    "sst_fraction": {
+      "low": 0.9,
+      "default": 1.0,
+      "high": 1.1
+    },
+    "load_shift_fraction": {
+      "low": 0.15,
+      "default": 0.3,
+      "high": 0.45
+    },
+    "wind_loss_fraction": {
+      "low": 0.1,
+      "default": 0.15,
+      "high": 0.2
+    },
+    "optimization_objective": {
+      "default": "co2",
+      "alternatives": [
+        "mwh"
+      ]
+    }
+  },
+  "cases": [
+    {
+      "name": "air_source_baseline",
+      "cooling_type": "air_source",
+      "optimization_enabled": false,
+      "optimization_method": "baseline",
+      "optimization_objective": null
+    },
+    {
+      "name": "seawater_baseline",
+      "cooling_type": "seawater",
+      "optimization_enabled": false,
+      "optimization_method": "baseline",
+      "optimization_objective": null
+    },
+    {
+      "name": "seawater_load_shift_sensitivity_objectives",
+      "cooling_type": "seawater",
+      "optimization_enabled": true,
+      "optimization_method": "load_shift",
+      "optimization_objectives": [
+        "co2",
+        "mwh"
+      ]
+    }
+  ]
+}
